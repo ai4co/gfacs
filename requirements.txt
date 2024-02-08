@@ -1,0 +1,10 @@
+### python==3.11.5
+# torch==2.1.1  # commented as cuda version may be different depending on the machine
+# torch_geometric==2.4.0
+
+numpy==1.23.5
+numba==0.58.1
+pandas==2.0.3
+scipy==1.10.1
+tqdm==4.66.1
+wandb==0.16.1
