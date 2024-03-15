@@ -63,7 +63,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--device", type=str,
                         default=("cuda:0" if torch.cuda.is_available() else "cpu"), 
                         help="The device to train NNs")
-    parser.add_argument("-s", "--size", type=int, default=100, help="Number of instances to test")
+    parser.add_argument("-s", "--size", type=int, default=None, help="Number of instances to test")
     ### GFACS
     parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
     ### Seed
