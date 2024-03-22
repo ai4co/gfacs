@@ -19,7 +19,18 @@ T = 5  # ACO iterations for validation
 START_NODE = None  # GFACS uses node coords as model input and the start_node is randomly chosen.
 
 
-def train_instance(model, optimizer, data, n_ants, cost_w=1.0, invtemp=1.0, guided_exploration=False, beta=100.0, it=0):
+def train_instance(
+        model,
+        optimizer,
+        data,
+        n_ants,
+        cost_w=1.0,
+        invtemp=1.0,
+        guided_exploration=False,
+        shared_energy_norm=False,
+        beta=100.0,
+        it=0
+    ):
     model.train()
 
     ##################################################
@@ -47,11 +58,11 @@ def train_instance(model, optimizer, data, n_ants, cost_w=1.0, invtemp=1.0, guid
         aco = ACO(distances, n_ants, heuristic=heu_mat, device=DEVICE, local_search='nls')
 
         costs_raw, log_probs, paths_raw = aco.sample(invtemp=invtemp, start_node=START_NODE)
-        advantage_raw = (costs_raw - costs_raw.mean())
+        advantage_raw = (costs_raw - (costs_raw.mean() if shared_energy_norm else 0.0))
 
         if guided_exploration:
             costs_nls, paths_nls = aco.sample_nls(paths_raw)
-            advantage_nls = (costs_nls - costs_nls.mean())
+            advantage_nls = (costs_nls - (costs_nls.mean() if shared_energy_norm else 0.0))
             weighted_advantage = cost_w * advantage_nls + (1 - cost_w) * advantage_raw
         else:
             weighted_advantage = advantage_raw
@@ -85,8 +96,6 @@ def train_instance(model, optimizer, data, n_ants, cost_w=1.0, invtemp=1.0, guid
         if USE_WANDB:
             _train_mean_cost += costs_raw.mean().item()
             _train_min_cost += costs_raw.min().item()
-            _train_mean_cost_nls += costs_nls.mean().item()  # type: ignore
-            _train_min_cost_nls += costs_nls.min().item()  # type: ignore
 
             normed_heumat = heu_mat / heu_mat.sum(dim=1, keepdim=True)
             entropy = -(normed_heumat * torch.log(normed_heumat)).sum(dim=1).mean()
@@ -94,7 +103,9 @@ def train_instance(model, optimizer, data, n_ants, cost_w=1.0, invtemp=1.0, guid
 
             _logZ_mean += logZ
             if guided_exploration:
-                _logZ_nls_mean += logZ_nls  # type: ignore
+                _train_mean_cost_nls += costs_nls.mean().item()
+                _train_min_cost_nls += costs_nls.min().item()
+                _logZ_nls_mean += logZ_nls
         ##################################################
 
     sum_loss = sum_loss / count
@@ -136,11 +147,11 @@ def infer_instance(model, pyg_data, distances, n_ants):
 
     aco = ACO(distances.cpu(), n_ants, heuristic=heu_mat.cpu(), device='cpu', local_search='nls')
 
-    costs = aco.sample(inference=True, start_node=START_NODE)[0]
+    costs = aco.sample(start_node=START_NODE, numba=NUMBA)[0]
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-    best_aco_1, diversity_1 = aco.run(n_iterations=1, inference=True)  # type: ignore
-    best_aco_T, diversity_T = aco.run(n_iterations=T - 1, inference=True)  # type: ignore
+    best_aco_1, diversity_1 = aco.run(n_iterations=1, numba=NUMBA)  # type: ignore
+    best_aco_T, diversity_T = aco.run(n_iterations=T - 1, numba=NUMBA)  # type: ignore
     return np.array([baseline, best_sample_cost, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 
@@ -162,12 +173,13 @@ def train_epoch(
     cost_w=0.95,
     invtemp=1.0,
     guided_exploration=False,
+    shared_energy_norm=False,
     beta=100.0,
 ):
     for i in tqdm(range(steps_per_epoch), desc="Train"):
         it = (epoch - 1) * steps_per_epoch + i
         data = generate_traindata(batch_size, n_node, k_sparse)
-        train_instance(net, optimizer, data, n_ants, cost_w, invtemp, guided_exploration, beta, it)
+        train_instance(net, optimizer, data, n_ants, cost_w, invtemp, guided_exploration, shared_energy_norm, beta, it)
 
 
 @torch.no_grad()
@@ -215,6 +227,7 @@ def train(
         cost_w_schedule_params=(0.5, 1.0, 5),  # (cost_w_min, cost_w_max, cost_w_flat_epochs)
         invtemp_schedule_params=(0.8, 1.0, 5),  # (invtemp_min, invtemp_max, invtemp_flat_epochs)
         guided_exploration=False,
+        shared_energy_norm=False,
         beta_schedule_params=(50, 500, 5),  # (beta_min, beta_max, beta_flat_epochs)
     ):
     savepath = os.path.join(savepath, str(n_nodes), run_name)
@@ -258,6 +271,7 @@ def train(
             cost_w,
             invtemp,
             guided_exploration,
+            shared_energy_norm,
             beta,
         )
         sum_time += time.time() - start
@@ -307,6 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature flat epochs for GFACS')
     ### GFACS
     parser.add_argument("--disable_guided_exp", action='store_true', help='Disable guided exploration for GFACS')
+    parser.add_argument("--disable_shared_energy_norm", action='store_true', help='Disable shared energy normalization for GFACS')
     parser.add_argument("--beta_min", type=float, default=None, help='Beta min for GFACS')
     parser.add_argument("--beta_max", type=float, default=None, help='Beta max for GFACS')
     parser.add_argument("--beta_flat_epochs", type=int, default=5, help='Beta flat epochs for GFACS')
@@ -327,6 +342,7 @@ if __name__ == "__main__":
 
     DEVICE = args.device if torch.cuda.is_available() else "cpu"
     USE_WANDB = not args.disable_wandb
+    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)
@@ -366,5 +382,6 @@ if __name__ == "__main__":
         cost_w_schedule_params=(args.cost_w_min, args.cost_w_max, args.cost_w_flat_epochs),
         invtemp_schedule_params=(args.invtemp_min, args.invtemp_max, args.invtemp_flat_epochs),
         guided_exploration=(not args.disable_guided_exp),
+        shared_energy_norm=(not args.disable_shared_energy_norm),
         beta_schedule_params=(args.beta_min, args.beta_max, args.beta_flat_epochs),
     )

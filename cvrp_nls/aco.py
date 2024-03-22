@@ -142,10 +142,7 @@ class ACO():
         return (1 / (heu/heu.max(-1, keepdims=True) + 1e-5))
 
     @torch.no_grad()
-    def run(self, n_iterations, inference=False):
-        if not inference:
-            raise NotImplementedError("For now, inference must be True here")
-
+    def run(self, n_iterations):
         for _ in range(n_iterations):
             paths = self.gen_path(require_prob=False)
             costs = self.gen_path_costs(paths)
@@ -155,7 +152,7 @@ class ACO():
                 self.improvement_phase(paths, costs)
             
             if self.swapstar:
-                self.multiple_swap_star(paths, inference=inference)
+                self.multiple_swap_star(paths, inference=True)
                 costs = self.gen_path_costs(paths)
 
             improved = False

@@ -24,7 +24,7 @@ class ACO():
         min=None,
         two_opt = False, # for compatibility
         device='cpu',
-        local_search = 'nls',
+        local_search: str | None = 'nls',
     ):
         
         self.problem_size = len(distances)
@@ -78,26 +78,25 @@ class ACO():
         sparse_distances = torch.ones_like(self.distances) * 1e10
         sparse_distances[edge_index_u, edge_index_v] = self.distances[edge_index_u, edge_index_v]
         self.heuristic = 1 / sparse_distances
-    
-    def sample(self, inference=False, invtemp=1.0, start_node=None):
-        if inference:
+
+    def sample(self, invtemp=1.0, start_node=None, numba=False):
+        if numba:
             probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
-            paths = inference_batch_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
+            paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
             paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
             # paths = self.gen_path(require_prob=False, start_node=start_node)
-            costs = self.gen_path_costs(paths)
-            return costs, None, paths
+            log_probs = None
         else:
             paths, log_probs = self.gen_path(invtemp=invtemp, require_prob=True, start_node=start_node)
-            costs = self.gen_path_costs(paths)
-            return costs, log_probs, paths
+        costs = self.gen_path_costs(paths)
+        return costs, log_probs, paths
 
     def sample_nls(self, paths):
         paths = self.local_search(paths)
         costs = self.gen_path_costs(paths)
         return costs, paths
 
-    def local_search(self, paths, inference = False):
+    def local_search(self, paths, inference=False):
         if self.local_search_type == "2opt":
             paths = self.two_opt(paths, inference)
         elif self.local_search_type == "nls":
@@ -105,19 +104,19 @@ class ACO():
         return paths
 
     @torch.no_grad()
-    def run(self, n_iterations, inference=False, return_path=False):
+    def run(self, n_iterations, return_path=False, start_node=None, numba=False):
         assert n_iterations > 0
 
-        if not inference:
-            raise NotImplementedError("For now, inference must be True here")
-
         for _ in range(n_iterations):
-            probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
-            paths = inference_batch_sample(probmat.cpu().numpy(), self.n_ants, None)
-            paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
+            if numba:
+                probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
+                paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
+                paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
+            else:
+                paths = self.gen_path(invtemp=1.0, require_prob=False, start_node=start_node)
             _paths = paths.clone()  # type: ignore
 
-            paths = self.local_search(paths, inference)
+            paths = self.local_search(paths, True)
             costs = self.gen_path_costs(paths)
 
             best_cost, best_idx = costs.min(dim=0)
@@ -285,7 +284,7 @@ class ACO():
 
 
 @nb.jit(nb.uint16[:](nb.float32[:,:],nb.int64), nopython=True, nogil=True)
-def _inference_sample(probmat: np.ndarray, start_node=None):
+def _numba_sample(probmat: np.ndarray, start_node=None):
     n = probmat.shape[0]
     route = np.zeros(n, dtype=np.uint16)
     mask = np.ones(n, dtype=np.uint8)
@@ -302,7 +301,7 @@ def _inference_sample(probmat: np.ndarray, start_node=None):
     return route
 
 
-def inference_batch_sample(probmat: np.ndarray, count=1, start_node=None):
+def numba_sample(probmat: np.ndarray, count=1, start_node=None):
     n = probmat.shape[0]
     routes = np.zeros((count, n), dtype=np.uint16)
     probmat = probmat.astype(np.float32)
@@ -312,12 +311,12 @@ def inference_batch_sample(probmat: np.ndarray, count=1, start_node=None):
         start_node = np.ones(count, dtype=np.int16) * start_node
     if count <= 4 and n < 500:
         for i in range(count):
-            routes[i] = _inference_sample(probmat, start_node[i])
+            routes[i] = _numba_sample(probmat, start_node[i])
     else:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for i in range(count):
-                future = executor.submit(_inference_sample, probmat, start_node[i])
+                future = executor.submit(_numba_sample, probmat, start_node[i])
                 futures.append(future)
             for i, future in enumerate(futures):
                 routes[i] = future.result()

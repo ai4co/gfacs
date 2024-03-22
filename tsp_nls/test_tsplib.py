@@ -36,7 +36,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
     results = torch.zeros(size=(len(t_aco_diff),))
     best_path = None
     for i, t in enumerate(t_aco_diff):
-        results[i], _, best_path = aco.run(t, inference=True, return_path=True)  # type: ignore
+        results[i], _, best_path = aco.run(t, return_path=True, numba=NUMBA)  # type: ignore
     return results, best_path
 
 
@@ -140,6 +140,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
+    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)

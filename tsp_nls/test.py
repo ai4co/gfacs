@@ -36,7 +36,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
     results = torch.zeros(size=(len(t_aco_diff),))
     diversities = torch.zeros(size=(len(t_aco_diff),))
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i] = aco.run(t, inference=True)  # type: ignore
+        results[i], diversities[i] = aco.run(t, numba=NUMBA)  # type: ignore
     return results, diversities
 
 
@@ -126,6 +126,7 @@ if __name__ == "__main__":
         args.k_sparse = args.nodes // 10
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
+    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)

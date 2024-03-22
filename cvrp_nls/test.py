@@ -59,7 +59,7 @@ def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco
     results = torch.zeros(size=(len(t_aco_diff),))
     diversities = torch.zeros(size=(len(t_aco_diff),))
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i] = aco.run(t, inference=True)
+        results[i], diversities[i] = aco.run(t)
         path = get_subroutes(aco.shortest_path)
         valid, length = validate_route(distances, demands, path)
         assert (length - results[i].item()) < 1e-5  # FIXME: remove this line
