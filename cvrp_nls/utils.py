@@ -126,8 +126,8 @@ if __name__ == '__main__':
     pathlib.Path('../data/cvrp').mkdir(exist_ok=True)
 
     # TAM dataset
-    torch.manual_seed(123456)
     for n in [100, 400, 1000]:  # problem scale
+        torch.manual_seed(123456)
         inst_list = []
         for _ in range(100):
             demand, dist, position = gen_instance(n, 'cpu', tam=True)  # type: ignore
