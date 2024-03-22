@@ -290,7 +290,8 @@ class ACO():
 
     def pick_move(self, dist, visit_mask, capacity_mask, require_prob, invtemp=1.0, selected=None):
         dist = (dist ** invtemp) * visit_mask * capacity_mask  # shape: (n_ants, p_size)
-        dist = Categorical(probs=dist)  # normalization is done in Categorical
+        dist = dist / dist.sum(dim=1, keepdim=True)  # This should be done for numerical stability
+        dist = Categorical(probs=dist)
         actions = selected if selected is not None else dist.sample()  # shape: (n_ants,)
         log_probs = dist.log_prob(actions) if require_prob else None  # shape: (n_ants,)
         return actions, log_probs

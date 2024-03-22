@@ -192,6 +192,7 @@ class ACO():
         heuristic = self.heuristic[prev]  # shape: (n_ants, p_size)  # type: ignore
         mask = mask1 * mask2
         dist = (((pheromone ** self.alpha) * (heuristic ** self.beta)) ** invtemp) * mask  # shape: (n_ants, p_size)
+        dist = dist / dist.sum(dim=1, keepdim=True)  # This should be done for numerical stability
         dist = Categorical(dist)
         actions = dist.sample() if guiding_node is None else guiding_node  # shape: (n_ants,)
         log_probs = dist.log_prob(actions) if require_prob else None  # shape: (n_ants,)

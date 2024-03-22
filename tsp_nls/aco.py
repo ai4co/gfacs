@@ -229,7 +229,8 @@ class ACO():
         prev = start
         for i in range(self.problem_size - 1):
             dist = (prob_mat[prev] ** invtemp) * mask
-            dist = Categorical(probs=dist)  # normalization is done in Categorical
+            dist = dist / dist.sum(dim=1, keepdim=True)  # This should be done for numerical stability
+            dist = Categorical(probs=dist)
             actions = paths[i + 1] if paths is not None else dist.sample() # shape: (n_ants,)
             paths_list.append(actions)
             if require_prob:

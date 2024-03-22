@@ -197,6 +197,7 @@ class ACO():
         dist = (((pheromone ** self.alpha) * (heuristic ** self.beta)) ** invtemp) * visit_mask * depot_mask
         # set the prob of depot to 1 if dist is all 0
         dist[(dist==0).all(dim=1), 0] = 1
+        dist = dist / dist.sum(dim=1, keepdim=True)  # This should be done for numerical stability
         dist = Categorical(dist)
         item = dist.sample() if guiding_node is None else guiding_node
         log_prob = dist.log_prob(item) if require_prob else None
