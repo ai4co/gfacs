@@ -46,7 +46,7 @@ def train_instance(
         guided_exploration=False,
         shared_energy_norm=False,
         beta=100.0,
-        it=0
+        it=0,
     ):
     model.train()
 

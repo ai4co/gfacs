@@ -145,7 +145,6 @@ class ACO():
     def run(self, n_iterations):
         for _ in range(n_iterations):
             paths = self.gen_path(require_prob=False)
-            costs = self.gen_path_costs(paths)
             _paths = paths.clone()   # type: ignore
 
             if self.adaptive:
@@ -153,7 +152,8 @@ class ACO():
             
             if self.swapstar:
                 self.multiple_swap_star(paths, inference=True)
-                costs = self.gen_path_costs(paths)
+
+            costs = self.gen_path_costs(paths)
 
             improved = False
             best_cost, best_idx = costs.min(dim=0)
@@ -499,7 +499,7 @@ class ACO():
             self.pheromone[path[:-1], torch.roll(path, shifts=-1)[:-1]] += 1.0 / cost
 
 
-def neural_swapstar(demand, distances, heu_dist, positions, p, disturb=10, limit=10000):
+def neural_swapstar(demand, distances, heu_dist, positions, p, disturb=5, limit=10000):
     p0 = p
     p1 = swapstar(demand, distances, positions, p0, count = limit)
     p2 = swapstar(demand, heu_dist, positions, p1, count = disturb)

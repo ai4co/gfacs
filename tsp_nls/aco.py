@@ -22,11 +22,11 @@ class ACO():
         pheromone=None,
         heuristic=None,
         min=None,
-        two_opt = False, # for compatibility
+        two_opt=False, # for compatibility
         device='cpu',
         local_search: str | None = 'nls',
     ):
-        
+
         self.problem_size = len(distances)
         self.distances = distances.to(device)
         self.n_ants = n_ants
@@ -35,7 +35,7 @@ class ACO():
         self.beta = beta
         self.elitist = elitist
         self.min_max = min_max
-        
+
         if min_max:
             if min is not None:
                 assert min > 1e-9
@@ -43,14 +43,14 @@ class ACO():
                 min = 0.1
             self.min = min
             self.max = None
-        
+
         if pheromone is None:
             self.pheromone = torch.ones_like(self.distances)
             if min_max:
                 self.pheromone = self.pheromone * self.min
         else:
             self.pheromone = pheromone.to(device)
-        
+
         assert local_search in [None, "2opt", "nls"]
         self.local_search_type = '2opt' if two_opt else local_search
 
@@ -73,7 +73,7 @@ class ACO():
         edge_index_u = torch.repeat_interleave(
             torch.arange(len(self.distances), device=self.device),
             repeats=k_sparse
-            )
+        )
         edge_index_v = torch.flatten(topk_indices)
         sparse_distances = torch.ones_like(self.distances) * 1e10
         sparse_distances[edge_index_u, edge_index_v] = self.distances[edge_index_u, edge_index_v]
@@ -128,7 +128,7 @@ class ACO():
                     if self.max is None:
                         self.pheromone *= max/self.pheromone.max()
                     self.max = max
-            
+
             self.update_pheromone(paths, costs)
 
         # Pairwise Jaccard similarity between paths
@@ -156,24 +156,24 @@ class ACO():
             costs: torch tensor with shape (n_ants,)
         '''
         self.pheromone = self.pheromone * self.decay 
-        
+
         if self.elitist:
             best_cost, best_idx = costs.min(dim=0)
             best_tour= paths[:, best_idx]
             self.pheromone[best_tour, torch.roll(best_tour, shifts=1)] += 1.0/best_cost
             self.pheromone[torch.roll(best_tour, shifts=1), best_tour] += 1.0/best_cost
-        
+
         else:
             for i in range(self.n_ants):
                 path = paths[:, i]
                 cost = costs[i]
                 self.pheromone[path, torch.roll(path, shifts=1)] += 1.0/cost
                 self.pheromone[torch.roll(path, shifts=1), path] += 1.0/cost
-                
+
         if self.min_max:
             self.pheromone[(self.pheromone > 1e-9) * (self.pheromone) < self.min] = self.min
             self.pheromone[self.pheromone > self.max] = self.max  # type: ignore
-    
+
     @torch.no_grad()
     def gen_path_costs(self, paths):
         '''
@@ -187,7 +187,7 @@ class ACO():
         v = torch.roll(u, shifts=1, dims=1)  # shape: (n_ants, problem_size)
         # assert (self.distances[u, v] > 0).all()
         return torch.sum(self.distances[u, v], dim=1)
-    
+
     def gen_numpy_path_costs(self, paths, numpy_distances):
         '''
         Args:
@@ -200,7 +200,7 @@ class ACO():
         v = np.roll(u, shift=1, axis=1)  # shape: (n_ants, problem_size)
         # assert (self.distances[u, v] > 0).all()
         return np.sum(numpy_distances[u, v], axis=1)
-    
+
     def gen_path(self, invtemp=1.0, require_prob=False, paths=None, start_node=None):
         '''
         Tour contruction for all ants
@@ -221,10 +221,10 @@ class ACO():
         prob_mat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
 
         mask[index, start] = 0
-        
+
         paths_list = [] # paths_list[i] is the ith move (tensor) for all ants
         paths_list.append(start)
-        
+
         log_probs_list = []  # log_probs_list[i] is the ith log_prob (tensor) for all ants' actions
         prev = start
         for i in range(self.problem_size - 1):
@@ -252,20 +252,20 @@ class ACO():
     @cached_property
     def heuristic_numpy(self):
         return self.heuristic.detach().cpu().numpy().astype(np.float32)  # type: ignore
-    
+
     @cached_property
     def heuristic_dist(self):
-        return 1 / (self.heuristic_numpy/self.heuristic_numpy.max(-1, keepdims=True) + 1e-5)
+        return 1 / (self.heuristic_numpy / self.heuristic_numpy.max(-1, keepdims=True) + 1e-5)
 
     def two_opt(self, paths, inference = False):
-        maxt = 10000 if inference else self.problem_size//4
+        maxt = 10000 if inference else self.problem_size // 4
         best_paths = batched_two_opt_python(self.distances_numpy, paths.T.cpu().numpy(), max_iterations=maxt)
         best_paths = torch.from_numpy(best_paths.T.astype(np.int64)).to(self.device)
 
         return best_paths
 
-    def nls(self, paths, inference = False, T_nls = 10, T_p = 20):
-        maxt = 10000 if inference else self.problem_size//4
+    def nls(self, paths, inference=False, T_nls=5, T_p=20):
+        maxt = 10000 if inference else self.problem_size // 4
         best_paths = batched_two_opt_python(self.distances_numpy, paths.T.cpu().numpy(), max_iterations=maxt)
         best_costs = self.gen_numpy_path_costs(best_paths, self.distances_numpy)
         new_paths = best_paths

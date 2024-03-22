@@ -29,7 +29,7 @@ def train_instance(
         guided_exploration=False,
         shared_energy_norm=False,
         beta=100.0,
-        it=0
+        it=0,
     ):
     model.train()
 
@@ -145,7 +145,13 @@ def infer_instance(model, pyg_data, distances, n_ants):
     heu_vec = model(pyg_data)
     heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
-    aco = ACO(distances.cpu(), n_ants, heuristic=heu_mat.cpu(), device='cpu', local_search='nls')
+    aco = ACO(
+        distances.cpu() if NUMBA else distances,
+        n_ants,
+        heuristic=heu_mat.cpu() if NUMBA else heu_mat,
+        device='cpu' if NUMBA else DEVICE,
+        local_search='nls'
+    )
 
     costs = aco.sample(start_node=START_NODE, numba=NUMBA)[0]
     baseline = costs.mean().item()

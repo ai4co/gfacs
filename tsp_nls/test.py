@@ -26,10 +26,10 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
         heu_mat = None
 
     aco = ACO(
-        distances.cpu(),
+        distances.cpu() if NUMBA else distances,
         n_ants,
-        heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
-        device='cpu',
+        heuristic=heu_mat.cpu() if heu_mat is not None and NUMBA else heu_mat,
+        device='cpu' if NUMBA else DEVICE,
         local_search='nls',
     )
 
