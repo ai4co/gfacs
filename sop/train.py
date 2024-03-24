@@ -19,7 +19,17 @@ T = 5
 
 
 def train_instance(
-    model, optimizer, batch_size, n_nodes, n_ants, invtemp=1.0, guided_exploration=False, beta=20.0, topk=5, it=0
+    model,
+    optimizer,
+    batch_size,
+    n_nodes,
+    n_ants,
+    invtemp=1.0,
+    guided_exploration=False,
+    shared_energy_norm=False,
+    beta=20.0,
+    topk=5,
+    it=0,
 ):
     model.train()
     ##################################################
@@ -50,7 +60,7 @@ def train_instance(
         aco = ACO(dist_mat, prec_cons, n_ants, heuristic=heu_mat, device=DEVICE)
 
         costs, log_probs, sols = aco.sample(invtemp=invtemp, return_sol=True)  # type: ignore
-        baseline = costs.mean()
+        baseline = costs.mean() if shared_energy_norm else torch.tensor(0.0, device=DEVICE)
 
         forward_flow = log_probs.sum(0) + logZ.expand(n_ants)  # type: ignore
         backward_flow = -(costs - baseline).detach() * beta  # There's no symmetricity in SOP
@@ -82,7 +92,7 @@ def train_instance(
             costs_best = costs_K[idx]
             costs_rand = costs_K[rand_idx]
             costs_ls = torch.cat([costs_best, costs_rand], dim=0)
-            baseline_ls = costs_ls.mean()
+            baseline_ls = costs_ls.mean() if shared_energy_norm else torch.tensor(0.0, device=DEVICE)
 
             forward_flow_ls = log_probs_ls.sum(0) + logZ_ls.expand(n_ants)  # type: ignore
             backward_flow_ls = -(costs_ls - baseline_ls).detach() * beta
@@ -168,12 +178,15 @@ def train_epoch(
     batch_size,
     invtemp=1.0,
     guided_exploration=False,
+    shared_energy_norm=False,
     beta=20.0,
     topk=5,
 ):
     for i in tqdm(range(steps_per_epoch), desc="Train"):
         it = (epoch - 1) * steps_per_epoch + i
-        train_instance(net, optimizer, batch_size, n_nodes, n_ants, invtemp, guided_exploration, beta, topk, it)
+        train_instance(
+            net, optimizer, batch_size, n_nodes, n_ants, invtemp, guided_exploration, shared_energy_norm, beta, topk, it
+        )
 
 
 @torch.no_grad()
@@ -220,6 +233,7 @@ def train(
         run_name="",
         invtemp_schedule_params=(0.8, 1.0, 5),  # (invtemp_min, invtemp_max, invtemp_flat_epochs)
         guided_exploration=False,
+        shared_energy_norm=False,
         beta_schedule_params=(5, 50, 5),  # (beta_min, beta_max, beta_flat_epochs)
         topk=5,
     ):
@@ -258,6 +272,7 @@ def train(
             batch_size,
             invtemp,
             guided_exploration,
+            shared_energy_norm,
             beta,
             topk,
         )
@@ -302,11 +317,12 @@ if __name__ == "__main__":
     parser.add_argument("--invtemp_max", type=float, default=1.0, help='Inverse temperature max for GFACS')
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature glat rpochs for GFACS')
     ### GFACS
-    parser.add_argument("--disable_guided_exp", action='store_true', help='Disable guided exploration for GFACS')
     parser.add_argument("--beta_min", type=float, default=None, help='Beta min for GFACS')
     parser.add_argument("--beta_max", type=float, default=None, help='Beta max for GFACS')
     parser.add_argument("--beta_flat_epochs", type=int, default=5, help='Beta flat epochs for GFACS')
+    parser.add_argument("--disable_shared_energy_norm", action='store_true', help='Disable shared energy normalization for GFACS')
     ### Top-k guided exploration
+    parser.add_argument("--disable_guided_exp", action='store_true', help='Disable guided exploration for GFACS')
     parser.add_argument("--topk", type=int, default=5, help="TopK for guided exploration")
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
@@ -359,6 +375,7 @@ if __name__ == "__main__":
         run_name=run_name,
         invtemp_schedule_params=(args.invtemp_min, args.invtemp_max, args.invtemp_flat_epochs),
         guided_exploration=(not args.disable_guided_exp),
+        shared_energy_norm=(not args.disable_shared_energy_norm),
         beta_schedule_params=(args.beta_min, args.beta_max, args.beta_flat_epochs),
         topk=args.topk,
     )
