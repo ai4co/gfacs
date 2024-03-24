@@ -24,6 +24,7 @@ def save_dataset(dataset, filename):
 
 if __name__ == "__main__":
     import argparse
+    import multiprocessing
 
     parser = argparse.ArgumentParser()
     parser.add_argument("nodes", type=int, help="Problem scale")
@@ -31,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--result_dir", type=str, default="pyvrp/results", help="Result directory")
     parser.add_argument("--n_cpus", type=int, default=1, help="Number of cpus to use")
     parser.add_argument("--size", type=int, default=None, help="Number of instances to solve")
-    parser.add_argument("--maxiter", type=int, default=1000, help="Number of iterations to perform")
+    parser.add_argument("--maxiter", type=int, default=20000, help="Number of iterations to perform")
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
 
@@ -65,28 +66,28 @@ if __name__ == "__main__":
     distances = [(data[2].numpy() * 10**4).astype(int) for data in dataset]
     locs = [(data[3].numpy() * 10**4).astype(int) for data in dataset]
 
-    pyvrp_dataset = [
-        ProblemData(
-            clients=[Client(x=_l[0], y=_l[1], demand=_d) for _l, _d in zip(_loc[1:], _demand)],
-            depots=[Client(x=_loc[0][0], y=_loc[0][1])],
+    def solve_problem(inputs):
+        loc, demand, distance = inputs
+        data = ProblemData(
+            clients=[Client(x=l[0], y=l[1], demand=d) for l, d in zip(loc[1:], demand)],
+            depots=[Client(x=loc[0][0], y=loc[0][1])],
             vehicle_types=[
-                VehicleType(len(_loc) - 1, capacity, 0, name=",".join(map(str, range(1, len(_loc)))))
+                VehicleType(len(loc) - 1, capacity, 0, name=",".join(map(str, range(1, len(loc)))))
             ],
-            distance_matrix=_distance,
-            duration_matrix=np.zeros_like(_distance),
+            distance_matrix=distance,
+            duration_matrix=np.zeros_like(distance),
         )
-        for _loc, _demand, _distance in zip(locs, demands, distances)
-    ]
-
-    results = []
-    costs = []
-    runtimes = []
-    for data in pyvrp_dataset:
         model = Model.from_data(data)
         result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed)
-        results.append(result)
-        costs.append(result.cost() / 10**4)
-        runtimes.append(result.runtime)
+        return result
+
+    pool = multiprocessing.Pool(opt.n_cpus)
+    results = pool.map(solve_problem, zip(locs, demands, distances))
+    pool.close()
+    pool.join()
+
+    costs = [result.cost() / 10**4 for result in results]
+    runtimes = [result.runtime for result in results]
 
     # Save the costs and runtimes to a txt file and results to a pkl file
     avg_cost = np.mean(costs)
