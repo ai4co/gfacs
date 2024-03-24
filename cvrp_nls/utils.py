@@ -1,4 +1,7 @@
 import os
+import pickle
+
+import numpy as np
 import torch
 from torch_geometric.data import Data
 
@@ -120,9 +123,47 @@ def load_val_dataset(n_node, k_sparse, device, tam=False):
     return val_list
 
 
+def load_vrplib_dataset(n_nodes, k_sparse_factor, device, dataset_name="X", filename=None):
+    if dataset_name == "X":
+        scale_map = {100: "100_299", 200: "100_299", 400: "300_699", 500: "300_699", 1000: "700_1001"}
+    elif dataset_name == "M":
+        scale_map = {100: "100_200", 200: "100_200"}
+    else:
+        raise ValueError(f"Unknown dataset name {dataset_name}")
+
+    filename = filename or f"../data/cvrp/vrplib/vrplib_{dataset_name}_{scale_map[n_nodes]}.pkl"
+    if not os.path.isfile(filename):
+        raise FileNotFoundError(
+            f"File {filename} not found, please download the test dataset from the original repository."
+        )
+    with open(filename, "rb") as f:
+        vrplib_list = pickle.load(f)
+
+    test_list = []
+    int_dist_list = []
+    name_list = []
+    for normed_demand, position, distance, name in vrplib_list:
+        # demand is already normalized by capacity
+        # normalize the position and distance into [0.01, 0.99] range
+        scale = (position.max(0) - position.min(0)).max() / 0.98
+        position = position - position.min(0)
+        position = position / scale + 0.01
+        normed_dist = distance / scale
+        np.fill_diagonal(normed_dist, 1e-10)
+        # convert all to torch
+        normed_demand = torch.tensor(normed_demand, device=device, dtype=torch.float64)
+        normed_dist = torch.tensor(normed_dist, device=device, dtype=torch.float64)
+        position = torch.tensor(position, device=device, dtype=torch.float64)
+        pyg_data = gen_pyg_data(normed_demand, normed_dist, device, k_sparse=position.shape[0] // k_sparse_factor)
+
+        test_list.append((pyg_data, normed_demand, normed_dist, position))
+        int_dist_list.append(distance)
+        name_list.append(name)
+    return test_list, int_dist_list, name_list
+
+
 if __name__ == '__main__':
     import pathlib
-    import pickle
     pathlib.Path('../data/cvrp').mkdir(exist_ok=True)
 
     # TAM dataset

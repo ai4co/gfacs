@@ -5,6 +5,7 @@
 numpy==1.23.5
 numba==0.58.1
 pandas==2.0.3
+pyvrp==0.7.0
 scipy==1.10.1
 tqdm==4.66.1
 wandb==0.16.1
