@@ -146,18 +146,18 @@ def infer_instance(model, pyg_data, distances, n_ants):
     heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
     aco = ACO(
-        distances.cpu() if NUMBA else distances,
+        distances.cpu(),
         n_ants,
-        heuristic=heu_mat.cpu() if NUMBA else heu_mat,
-        device='cpu' if NUMBA else DEVICE,
+        heuristic=heu_mat.cpu(),
+        device='cpu',
         local_search='nls'
     )
 
-    costs = aco.sample(start_node=START_NODE, numba=NUMBA)[0]
+    costs = aco.sample(inference=True, start_node=START_NODE)[0]
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-    best_aco_1, diversity_1 = aco.run(n_iterations=1, numba=NUMBA)  # type: ignore
-    best_aco_T, diversity_T = aco.run(n_iterations=T - 1, numba=NUMBA)  # type: ignore
+    best_aco_1, diversity_1 = aco.run(n_iterations=1, inference=True, start_node=START_NODE)
+    best_aco_T, diversity_T = aco.run(n_iterations=T - 1, inference=True, start_node=START_NODE)
     return np.array([baseline, best_sample_cost, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 
@@ -348,7 +348,6 @@ if __name__ == "__main__":
 
     DEVICE = args.device if torch.cuda.is_available() else "cpu"
     USE_WANDB = not args.disable_wandb
-    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)

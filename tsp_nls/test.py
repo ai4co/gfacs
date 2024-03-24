@@ -26,17 +26,17 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
         heu_mat = None
 
     aco = ACO(
-        distances.cpu() if NUMBA else distances,
+        distances.cpu(),
         n_ants,
-        heuristic=heu_mat.cpu() if heu_mat is not None and NUMBA else heu_mat,
-        device='cpu' if NUMBA else DEVICE,
+        heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
+        device='cpu',
         local_search='nls',
     )
 
     results = torch.zeros(size=(len(t_aco_diff),))
     diversities = torch.zeros(size=(len(t_aco_diff),))
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i] = aco.run(t, numba=NUMBA)  # type: ignore
+        results[i], diversities[i] = aco.run(t, inference=True, start_node=START_NODE)
     return results, diversities
 
 
@@ -126,7 +126,6 @@ if __name__ == "__main__":
         args.k_sparse = args.nodes // 10
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
-    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)

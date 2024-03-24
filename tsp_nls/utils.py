@@ -18,20 +18,6 @@ def gen_distance_matrix(tsp_coordinates):
     return distances
 
 
-def gen_distance_matrix_tsplib(tsp_coordinates):
-    '''
-    Args:
-        tsp_coordinates: torch tensor [n_nodes, 2] for node coordinates
-    Returns:
-        distance_matrix: torch tensor [n_nodes, n_nodes] for EUC distances
-    '''
-    n_nodes = len(tsp_coordinates)
-    distances = torch.norm(tsp_coordinates[:, None] - tsp_coordinates, dim=2, p=2)
-    # distances = distances + 1e-10
-    distances[torch.arange(n_nodes), torch.arange(n_nodes)] = 1e9 # note here
-    return distances
-
-
 def gen_pyg_data(tsp_coordinates, k_sparse, start_node=None):
     '''
     Args:
@@ -74,7 +60,7 @@ def gen_pyg_data_tsplib(tsp_coordinates, k_sparse, start_node=None):
         distances: distance matrix
     '''
     n_nodes = len(tsp_coordinates)
-    distances = gen_distance_matrix_tsplib(tsp_coordinates)
+    distances = gen_distance_matrix(tsp_coordinates)
     topk_values, topk_indices = torch.topk(distances, k=k_sparse, dim=1, largest=False)
     edge_index = torch.stack(
         [

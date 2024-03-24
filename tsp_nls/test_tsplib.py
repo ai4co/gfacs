@@ -34,10 +34,10 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
     )
 
     results = torch.zeros(size=(len(t_aco_diff),))
-    best_path = None
     for i, t in enumerate(t_aco_diff):
-        results[i], _, best_path = aco.run(t, return_path=True, numba=NUMBA)  # type: ignore
-    return results, best_path
+        cost, _ = aco.run(t, inference=True, start_node=START_NODE)
+        results[i] = cost
+    return results, aco.shortest_path
 
 
 @torch.no_grad()
@@ -49,7 +49,8 @@ def test(dataset, scale_list, model, n_ants, t_aco):
     best_paths = []
     start = time.time()
     for (pyg_data, distances), scale in tqdm(zip(dataset, scale_list)):
-        results, best_path = infer_instance(model, pyg_data, distances, n_ants, t_aco_diff)
+        ceiled_distances = (distances * scale).ceil()
+        results, best_path = infer_instance(model, pyg_data, ceiled_distances, n_ants, t_aco_diff)
         results_list.append(results)
         best_paths.append(best_path)
     end = time.time()
@@ -94,8 +95,9 @@ def main(ckpt_path, n_nodes, k_sparse_factor=10, n_ants=100, n_iter=10, guided_e
         net.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
     else:
         net = None
-    _, best_paths, duration = test(test_list, scale_list, net, n_ants, t_aco)
+    results_list, best_paths, duration = test(test_list, scale_list, net, n_ants, t_aco)
 
+    ### results_list is not consistent with the lengths calculated by below code. IDK why...
     ### Reload the original TSPlib data for cost calculation, as they rounds up the distances
     tsplib_data_list = [make_tsplib_data("../data/tsp/tsplib/TSPlib_70instances.txt", i) for i in range(70)]
     tsplib_instances = [(dat[0][0], dat[1], dat[2][0]) for dat in tsplib_data_list if dat[2][0] in name_list]
@@ -119,7 +121,7 @@ def main(ckpt_path, n_nodes, k_sparse_factor=10, n_ants=100, n_iter=10, guided_e
     os.makedirs(dirname, exist_ok=True)
 
     result_filename = f"test_result_ckpt{filename}-tsplib{n_nodes}-nants{n_ants}-niter{n_iter}-seed{seed}"
-    results_df.to_csv(os.path.join(dirname, result_filename + ".csv"), index=True)
+    results_df.to_csv(os.path.join(dirname, f"{result_filename}.csv"), index=True)
 
 if __name__ == "__main__":
     import argparse
@@ -140,7 +142,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
-    NUMBA = True if args.nodes < 500 else False
 
     # seed everything
     torch.manual_seed(args.seed)

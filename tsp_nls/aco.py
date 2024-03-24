@@ -79,8 +79,8 @@ class ACO():
         sparse_distances[edge_index_u, edge_index_v] = self.distances[edge_index_u, edge_index_v]
         self.heuristic = 1 / sparse_distances
 
-    def sample(self, invtemp=1.0, start_node=None, numba=False):
-        if numba:
+    def sample(self, invtemp=1.0, inference=False, start_node=None):
+        if inference:
             probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
             paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
             paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
@@ -104,11 +104,11 @@ class ACO():
         return paths
 
     @torch.no_grad()
-    def run(self, n_iterations, return_path=False, start_node=None, numba=False):
+    def run(self, n_iterations, inference=True, start_node=None):
         assert n_iterations > 0
 
         for _ in range(n_iterations):
-            if numba:
+            if inference:
                 probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
                 paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
                 paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
@@ -116,7 +116,7 @@ class ACO():
                 paths = self.gen_path(invtemp=1.0, require_prob=False, start_node=start_node)
             _paths = paths.clone()  # type: ignore
 
-            paths = self.local_search(paths, True)
+            paths = self.local_search(paths, inference)
             costs = self.gen_path_costs(paths)
 
             best_cost, best_idx = costs.min(dim=0)
@@ -142,9 +142,6 @@ class ACO():
         for i, j in combinations(range(len(edge_sets)), 2):
             jaccard_sum += len(edge_sets[i] & edge_sets[j]) / len(edge_sets[i] | edge_sets[j])
         diversity = 1 - jaccard_sum / (len(edge_sets) * (len(edge_sets) - 1) / 2)
-
-        if return_path:
-            return self.lowest_cost, diversity, self.shortest_path
 
         return self.lowest_cost, diversity
 
