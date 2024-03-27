@@ -44,7 +44,6 @@ if __name__ == "__main__":
         dataset = load_test_dataset(opt.nodes, opt.nodes // 5, "cpu", tam=opt.tam)
     else:
         raise ValueError("Invalid dataset type")
-    capacity = get_capacity(opt.nodes, opt.tam)
 
     size = opt.size or len(dataset)
     dataset = dataset[:size]
@@ -61,7 +60,7 @@ if __name__ == "__main__":
             print(f.read())
         exit(0)
 
-    capacity = 600
+    capacity = 600  # note that demand was normalized by capacity
     demands = [(data[1][1:].numpy() * 600).astype(int) for data in dataset]
     distances = [(data[2].numpy() * 10**4).astype(int) for data in dataset]
     locs = [(data[3].numpy() * 10**4).astype(int) for data in dataset]
