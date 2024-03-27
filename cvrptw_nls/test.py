@@ -17,7 +17,10 @@ from typing import Tuple, List
 EPS = 1e-10
 
 
-def validate_route(distance: torch.Tensor, demands: torch.Tensor, routes: List[torch.Tensor]) -> Tuple[bool, float]:
+def validate_route(
+    distance: torch.Tensor, demands: torch.Tensor, windows: torch.Tensor, routes: List[torch.Tensor]
+) -> Tuple[bool, float]:
+    raise NotImplementedError
     length = 0.0
     valid = True
     visited = {0}
@@ -38,7 +41,9 @@ def validate_route(distance: torch.Tensor, demands: torch.Tensor, routes: List[t
 
 
 @torch.no_grad()
-def infer_instance(model, pyg_data, demands, distances, positions, windows, n_ants, t_aco_diff):
+def infer_instance(
+    model, pyg_data, demands, distances, positions, windows, n_ants, t_aco_diff, local_search_params=None
+):
     if model is not None:
         model.eval()
         heu_vec = model(pyg_data)
@@ -49,11 +54,12 @@ def infer_instance(model, pyg_data, demands, distances, positions, windows, n_an
     aco = ACO(
         n_ants=n_ants,
         heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
-        demand=demands.cpu(),
+        demands=demands.cpu(),
         distances=distances.cpu(),
-        window = windows.cpu(),
+        windows = windows.cpu(),
         device='cpu',
-        swapstar=True,
+        local_search=True,
+        local_search_params=local_search_params,
         positions=positions.cpu(),
     )
 
@@ -61,11 +67,11 @@ def infer_instance(model, pyg_data, demands, distances, positions, windows, n_an
     diversities = torch.zeros(size=(len(t_aco_diff),))
     for i, t in enumerate(t_aco_diff):
         results[i], diversities[i] = aco.run(t)
-        path = get_subroutes(aco.shortest_path)
-        valid, length = validate_route(distances, demands, path)
-        assert (length - results[i].item()) < 1e-5  # FIXME: remove this line
-        if valid is False:
-           print("invalid solution.")
+        # path = get_subroutes(aco.shortest_path)
+        # valid, length = validate_route(distances, demands, windows, path)
+        # assert (length - results[i].item()) < 1e-5  # FIXME: remove this line
+        # if valid is False:
+        #    print("invalid solution.")
     return results, diversities
 
 

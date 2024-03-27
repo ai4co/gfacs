@@ -185,7 +185,7 @@ class ACO():
         # assert (self.distances[u, v] > 0).all()
         return torch.sum(self.distances[u, v], dim=1)
 
-    def gen_numpy_path_costs(self, paths, numpy_distances):
+    def gen_numpy_path_costs(self, paths):
         '''
         Args:
             paths: numpy ndarray with shape (n_ants, problem_size), note the shape
@@ -196,7 +196,7 @@ class ACO():
         u = paths
         v = np.roll(u, shift=1, axis=1)  # shape: (n_ants, problem_size)
         # assert (self.distances[u, v] > 0).all()
-        return np.sum(numpy_distances[u, v], axis=1)
+        return np.sum(self.distances_numpy[u, v], axis=1)
 
     def gen_path(self, invtemp=1.0, require_prob=False, paths=None, start_node=None):
         '''
@@ -264,20 +264,19 @@ class ACO():
     def nls(self, paths, inference=False, T_nls=5, T_p=20):
         maxt = 10000 if inference else self.problem_size // 4
         best_paths = batched_two_opt_python(self.distances_numpy, paths.T.cpu().numpy(), max_iterations=maxt)
-        best_costs = self.gen_numpy_path_costs(best_paths, self.distances_numpy)
+        best_costs = self.gen_numpy_path_costs(best_paths)
         new_paths = best_paths
 
         for _ in range(T_nls):
             perturbed_paths = batched_two_opt_python(self.heuristic_dist, new_paths, max_iterations=T_p)
             new_paths = batched_two_opt_python(self.distances_numpy, perturbed_paths, max_iterations=maxt)
-            new_costs = self.gen_numpy_path_costs(new_paths, self.distances_numpy)
+            new_costs = self.gen_numpy_path_costs(new_paths)
 
             improved_indices = new_costs < best_costs
             best_paths[improved_indices] = new_paths[improved_indices]
             best_costs[improved_indices] = new_costs[improved_indices]
 
         best_paths = torch.from_numpy(best_paths.T.astype(np.int64)).to(self.device)
-
         return best_paths
 
 

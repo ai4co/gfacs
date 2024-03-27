@@ -3,7 +3,7 @@ import os
 import pickle
 
 import numpy as np
-from pyvrp import Model, ProblemData, Client, VehicleType
+from pyvrp import Model, ProblemData, Client, Depot, VehicleType
 from pyvrp.stop import MaxIterations
 
 from utils import load_val_dataset, load_test_dataset, get_capacity
@@ -64,12 +64,17 @@ if __name__ == "__main__":
     demands = [(data[1][1:].numpy() * 600).astype(int) for data in dataset]
     distances = [(data[2].numpy() * 10**4).astype(int) for data in dataset]
     locs = [(data[3].numpy() * 10**4).astype(int) for data in dataset]
+    windows = [(data[4].numpy() * 10**4).astype(int) for data in dataset]
 
     def solve_problem(inputs):
-        loc, demand, distance = inputs
+        loc, demand, distance, window = inputs
         data = ProblemData(
-            clients=[Client(x=l[0], y=l[1], demand=d) for l, d in zip(loc[1:], demand)],
-            depots=[Client(x=loc[0][0], y=loc[0][1])],
+            clients=[
+                Client(
+                    x=l[0], y=l[1], delivery=d, tw_early=w[0], tw_late=w[1])
+                    for l, d, w in zip(loc[1:], demand, window)
+            ],
+            depots=[Depot(x=loc[0][0], y=loc[0][1], tw_early=window[0][0], tw_late=window[0][1])],
             vehicle_types=[
                 VehicleType(len(loc) - 1, capacity, 0, name=",".join(map(str, range(1, len(loc)))))
             ],
@@ -77,11 +82,11 @@ if __name__ == "__main__":
             duration_matrix=np.zeros_like(distance),
         )
         model = Model.from_data(data)
-        result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed)
+        result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed, display=False)
         return result
 
     pool = multiprocessing.Pool(opt.n_cpus)
-    results = pool.map(solve_problem, zip(locs, demands, distances))
+    results = pool.map(solve_problem, zip(locs, demands, distances, windows))
     pool.close()
     pool.join()
 

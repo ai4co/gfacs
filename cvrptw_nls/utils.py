@@ -1,7 +1,5 @@
 import os
-import pickle
 
-import numpy as np
 import torch
 from torch_geometric.data import Data
 from scipy.spatial.distance import cdist
@@ -41,19 +39,22 @@ def gen_instance(n, device, service_time=0.0, max_loc=150, max_time=480, tam=Fal
     locations = max_loc * torch.rand(size=(n + 1, 2), device=device, dtype=torch.double)
     demands = torch.randint(low=DEMAND_LOW, high=DEMAND_HIGH + 1, size=(n, ), device=device, dtype=torch.double)
     demands_normalized = demands / get_capacity(n, tam)
+    all_demands = torch.cat((torch.zeros((1, ), device=device, dtype=torch.double), demands_normalized))
     
     if scale:
         locations = locations / max_time
-    
+        service_time = service_time / max_time 
+
+    distances = gen_distance_matrix(locations)
+
     # 1. get distances from depot
-    dist_depot = torch.cdist(locations[1:], locations[0].unsqueeze(0)).squeeze(dim=1)
-    dist = torch.cat((torch.zeros(size=(1,), device=device), dist_depot))
-    
+    dist = distances[0]
+
     #2. define upper bound for time windows to make sure the vehicle can get back to the depot in time
     upper_bound = 1 - dist - float(service_time)
     
-    ts_1 = torch.rand(n+1, device=device)
-    ts_2 = torch.rand(n+1, device=device)
+    ts_1 = torch.rand(n + 1, device=device)
+    ts_2 = torch.rand(n + 1, device=device)
     
     # 3. create random values between 0 and 1
     min_ts = (dist + (upper_bound - dist) * ts_1)
@@ -65,12 +66,9 @@ def gen_instance(n, device, service_time=0.0, max_loc=150, max_time=480, tam=Fal
 
     # 5. reset times for depot
     min_times[0] = 0.0
-    max_times[0] = max_time
-    
+    max_times[0] = n
+
     windows = torch.stack([min_times, max_times], dim=-1)
-    
-    all_demands = torch.cat((torch.zeros((1, ), device=device, dtype=torch.double), demands_normalized))
-    distances = gen_distance_matrix(locations)
 
     return all_demands, distances, locations, windows
 
@@ -135,7 +133,7 @@ def load_val_dataset(n_node, k_sparse, device, tam=False):
     filename = f"../data/cvrptw/valDataset-{'tam-' if tam else ''}{n_node}.pt"
     if not os.path.isfile(filename):
         dataset = []
-        for i in range(1):
+        for i in range(10):
             demand, dist, position, window = gen_instance(n_node, device, tam)  # type: ignore
             instance = torch.vstack([demand, position.T, dist, window.T])
             dataset.append(instance)
@@ -150,45 +148,6 @@ def load_val_dataset(n_node, k_sparse, device, tam=False):
         pyg_data = gen_pyg_data(demands, distances, windows.T, device, k_sparse=k_sparse)
         val_list.append((pyg_data, demands, distances, position.T, windows.T))
     return val_list
-
-
-def load_vrplib_dataset(n_nodes, k_sparse_factor, device, dataset_name="X", filename=None):
-    if dataset_name == "X":
-        scale_map = {100: "100_299", 200: "100_299", 400: "300_699", 500: "300_699", 1000: "700_1001"}
-    elif dataset_name == "M":
-        scale_map = {100: "100_200", 200: "100_200"}
-    else:
-        raise ValueError(f"Unknown dataset name {dataset_name}")
-
-    filename = filename or f"../data/cvrp/vrplib/vrplib_{dataset_name}_{scale_map[n_nodes]}.pkl"
-    if not os.path.isfile(filename):
-        raise FileNotFoundError(
-            f"File {filename} not found, please download the test dataset from the original repository."
-        )
-    with open(filename, "rb") as f:
-        vrplib_list = pickle.load(f)
-
-    test_list = []
-    int_dist_list = []
-    name_list = []
-    for normed_demand, position, distance, name in vrplib_list:
-        # demand is already normalized by capacity
-        # normalize the position and distance into [0.01, 0.99] range
-        scale = (position.max(0) - position.min(0)).max() / 0.98
-        position = position - position.min(0)
-        position = position / scale + 0.01
-        normed_dist = distance / scale
-        np.fill_diagonal(normed_dist, 1e-10)
-        # convert all to torch
-        normed_demand = torch.tensor(normed_demand, device=device, dtype=torch.float64)
-        normed_dist = torch.tensor(normed_dist, device=device, dtype=torch.float64)
-        position = torch.tensor(position, device=device, dtype=torch.float64)
-        pyg_data = gen_pyg_data(normed_demand, normed_dist, device, k_sparse=position.shape[0] // k_sparse_factor)
-
-        test_list.append((pyg_data, normed_demand, normed_dist, position))
-        int_dist_list.append(distance)
-        name_list.append(name)
-    return test_list, int_dist_list, name_list
 
 
 if __name__ == '__main__':
@@ -207,7 +166,7 @@ if __name__ == '__main__':
         torch.save(testDataset, f'../data/cvrptw/testDataset-tam-{n}.pt')
 
     # main Dataset
-    for scale in [200, 500, 1000]:
+    for n in [100, 200, 500, 1000]:
         torch.manual_seed(123456)
         inst_list = []
         # for instance in dataset:
@@ -215,4 +174,4 @@ if __name__ == '__main__':
             demand, dist, position, window = gen_instance(n, 'cpu')
             inst_list.append(torch.vstack([demand, position.T, dist, window.T]))
         test_dataset = torch.stack(inst_list)
-        torch.save(test_dataset, f"../data/cvrptw/testDataset-{scale}.pt")
+        torch.save(test_dataset, f"../data/cvrptw/testDataset-{n}.pt")

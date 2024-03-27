@@ -1,12 +1,12 @@
+from functools import cached_property, partial
+import itertools
+import random
+
+import numpy as np
 import torch
 from torch.distributions import Categorical
-import random
-import itertools
-import numpy as np
-from swapstar import swapstar
-from functools import cached_property
-import concurrent.futures
-from itertools import combinations
+
+from pyvrp_local_search import pyvrp_batched_local_search
 
 
 CAPACITY = 1.0 # The input demands shall be normalized
@@ -41,9 +41,9 @@ class ACO():
     def __init__(
         self,  # 0: depot
         distances, # (n, n)
-        demand,   # (n, )
-        window,  # (n, 2)
-        service_time=0.02,
+        demands,   # (n, )
+        windows,  # (n, 2)
+        service_time=0.0,
         n_ants=20, 
         decay=0.9,
         alpha=1,
@@ -56,15 +56,16 @@ class ACO():
         device='cpu',
         adaptive=False,
         capacity=CAPACITY,
-        swapstar = False,
+        local_search = False,
+        local_search_params = None,
         positions = None,
     ):
         
         self.problem_size = len(distances)
         self.distances = distances
         self.capacity = capacity
-        self.demand = demand
-        self.window = window
+        self.demands = demands
+        self.windows = windows
         self.service_time = service_time
         
         self.n_ants = n_ants
@@ -74,10 +75,11 @@ class ACO():
         self.elitist = elitist or adaptive
         self.min_max = min_max
         self.adaptive = adaptive
-        self.swapstar = swapstar
         self.positions = positions
+        self.local_search = local_search
+        self.local_search_params = local_search_params or {}
 
-        assert positions is not None if swapstar else True
+        assert positions is not None if local_search else True
         
         if min_max:
             if min is not None:
@@ -111,39 +113,77 @@ class ACO():
 
     def sample_nls(self, invtemp=1.0):
         paths, log_probs = self.gen_path(require_prob=True, invtemp=invtemp)  # type: ignore
-        paths_raw = paths.clone()
-        costs_raw = self.gen_path_costs(paths_raw).detach()
-        self.multiple_swap_star(paths)
-        costs = self.gen_path_costs(paths).detach()
-        return costs, log_probs, paths, costs_raw, paths_raw
+        costs_raw = self.gen_path_costs(paths).detach()
+        new_paths = self.neural_local_search(paths)
+        costs = self.gen_path_costs(new_paths).detach()
+        return costs, log_probs, new_paths, costs_raw, paths
 
     @torch.no_grad()
-    def multiple_swap_star(self, paths, indexes=None, inference=False):
-        subroutes_all = []
-        for i in range(paths.size(1)) if indexes is None else indexes:
-            subroutes = get_subroutes(paths[:, i])
-            subroutes_all.append((i, subroutes))
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = []
-            for i, p in subroutes_all:
-                future = executor.submit(
-                    neural_swapstar,
-                    self.demand_cpu,
-                    self.distances_cpu,
-                    self.heuristic_dist,
-                    self.positions_cpu,
-                    p,
-                    limit=10000 if inference else self.problem_size // 10
-                )
-                futures.append((i, future))
-            for i, future in futures:
-                paths[:, i] = merge_subroutes(future.result(), paths.size(0), self.device)
+    def neural_local_search(self, paths, inference=False, T_nls=1) -> torch.Tensor:
+        paths_np = paths.T.cpu().numpy()
+        partial_func = partial(
+            pyvrp_batched_local_search,
+            positions=self.positions_cpu,  # type: ignore
+            demands=self.demands_cpu,
+            windows=self.windows_cpu,
+            neighbourhood_params=self.local_search_params.get("neighbourhood_params"),
+            max_trials=self.local_search_params.get("max_trials", 10),
+            inference=inference,
+            seed=self.local_search_params.get("seed", 0),
+            n_cpus=min(self.n_ants, self.local_search_params.get("n_cpus", 1)),
+        )
+
+        ce_params = self.local_search_params.get("cost_evaluator_params")
+        heu_ce_params = None
+        if ce_params is not None:
+            heu_ce_params = ce_params.copy()
+            if "load_penalty" in heu_ce_params:
+                heu_ce_params["load_penalty"] /= 10
+            if "tw_penalty" in heu_ce_params:
+                heu_ce_params["tw_penalty"] /= 10
+
+        best_paths = partial_func(
+            paths=paths_np, distances=self.distances_cpu, cost_evaluator_params=ce_params, allow_infeasible=False
+        )
+        best_costs = self.gen_numpy_path_costs(best_paths)
+        new_paths = best_paths
+
+        path_len = new_paths.shape[1]
+        for _ in range(T_nls):
+            perturbed_paths = partial_func(
+                paths=new_paths,
+                distances=self.heuristic_dist,
+                cost_evaluator_params=heu_ce_params,
+                allow_infeasible=True,
+            )
+            new_paths = partial_func(
+                paths=perturbed_paths,
+                distances=self.distances_cpu,
+                cost_evaluator_params=ce_params,
+                allow_infeasible=False,
+            )
+            new_costs = self.gen_numpy_path_costs(new_paths)
+
+            improved_indices = new_costs < best_costs
+            improved_paths = new_paths[improved_indices]
+            new_path_len = new_paths.shape[1]
+            if path_len > new_path_len:
+                improved_paths = np.pad(improved_paths, ((0, 0), (0, path_len - new_path_len)), constant_values=0)
+            elif new_path_len > path_len:
+                best_paths = np.pad(best_paths, ((0, 0), (0, new_path_len - path_len)), constant_values=0)
+                path_len = new_path_len
+
+            best_paths[improved_indices] = improved_paths
+            best_costs[improved_indices] = new_costs[improved_indices]
+
+        best_paths = torch.tensor(best_paths.T.astype(np.int64), device=self.device)
+        return best_paths
 
     @cached_property
     @torch.no_grad()
     def heuristic_dist(self):
         heu = self.heuristic.detach().cpu().numpy()  # type: ignore
-        return (1 / (heu/heu.max(-1, keepdims=True) + 1e-5))
+        return (1 / (heu/heu.max(-1, keepdims=True) + 1e-2))
 
     @torch.no_grad()
     def run(self, n_iterations):
@@ -154,8 +194,8 @@ class ACO():
             if self.adaptive:
                 self.improvement_phase(paths, costs)
             
-            if self.swapstar:
-                self.multiple_swap_star(paths, inference=True)
+            if self.local_search:
+                paths = self.neural_local_search(paths, inference=True)
 
             costs = self.gen_path_costs(paths)
 
@@ -190,7 +230,7 @@ class ACO():
 
         # Diversity
         jaccard_sum = 0
-        for i, j in combinations(range(len(edge_sets)), 2):
+        for i, j in itertools.combinations(range(len(edge_sets)), 2):
             jaccard_sum += len(edge_sets[i] & edge_sets[j]) / len(edge_sets[i] | edge_sets[j])
         diversity = 1 - jaccard_sum / (len(edge_sets) * (len(edge_sets) - 1) / 2)
 
@@ -228,6 +268,18 @@ class ACO():
         v = torch.roll(u, shifts=-1, dims=1)  
         return torch.sum(self.distances[u[:, :-1], v[:, :-1]], dim=1)
 
+    def gen_numpy_path_costs(self, paths):
+        '''
+        Args:
+            paths: numpy ndarray with shape (n_ants, problem_size), note the shape
+        Returns:
+            Lengths of paths: numpy ndarray with shape (n_ants,)
+        '''
+        u = paths
+        v = np.roll(u, shift=1, axis=1)  # shape: (n_ants, problem_size)
+        # assert (self.distances[u, v] > 0).all()
+        return np.sum(self.distances_cpu[u, v], axis=1)
+
     def gen_path(self, require_prob=False, invtemp=1.0, paths=None):
         actions = torch.zeros((self.n_ants,), dtype=torch.long, device=self.device)
         prev = None
@@ -240,7 +292,6 @@ class ACO():
         used_capacity, capacity_mask = self.update_capacity_mask(actions, used_capacity)
 
         cur_time, time_window_mask = self.update_time_window_mask(actions, cur_time, prev)
-
         
         prob_mat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
         prev = actions
@@ -255,7 +306,6 @@ class ACO():
         feasible_idx = torch.arange(self.n_ants, device=self.device) if paths is not None else None
         ##################################################
         while not done:
-            
             selected = paths[i + 1] if paths is not None else None
             actions, log_probs = self.pick_move(prob_mat[prev], visit_mask, capacity_mask, time_window_mask, require_prob, invtemp, selected)
             paths_list.append(actions)
@@ -265,10 +315,9 @@ class ACO():
             visit_mask = self.update_visit_mask(visit_mask, actions)
             used_capacity, capacity_mask = self.update_capacity_mask(actions, used_capacity)
             cur_time, time_window_mask = self.update_time_window_mask(actions, cur_time, prev)
-            
+
             ##################################################
             # NLS may generate infeasible solutions
-            
             if paths is not None:
                 infeasible_idx = (torch.where(capacity_mask.sum(-1) == 0)[0]) | (torch.where(time_window_mask.sum(-1) == 0)[0])
 
@@ -307,12 +356,9 @@ class ACO():
     def pick_move(self, dist, visit_mask, capacity_mask, time_window_mask, require_prob, invtemp=1.0, selected=None):
         
         dist = (dist ** invtemp) * visit_mask * capacity_mask * time_window_mask  # shape: (n_ants, p_size)
-        
         dist = dist / dist.sum(dim=1, keepdim=True)  # This should be done for numerical stability
-        
         dist = Categorical(probs=dist)
         actions = selected if selected is not None else dist.sample()  # shape: (n_ants,)
-        
         log_probs = dist.log_prob(actions) if require_prob else None  # shape: (n_ants,)
         return actions, log_probs
 
@@ -335,11 +381,11 @@ class ACO():
         capacity_mask = torch.ones(size=(self.n_ants, self.problem_size), device=self.device)
         # update capacity
         used_capacity[cur_nodes==0] = 0
-        used_capacity = used_capacity + self.demand[cur_nodes]
+        used_capacity = used_capacity + self.demands[cur_nodes]
         # update capacity_mask
         remaining_capacity = self.capacity - used_capacity # (n_ants,)
         remaining_capacity_repeat = remaining_capacity.unsqueeze(-1).repeat(1, self.problem_size) # (n_ants, p_size)
-        demand_repeat = self.demand.unsqueeze(0).repeat(self.n_ants, 1) # (n_ants, p_size)
+        demand_repeat = self.demands.unsqueeze(0).repeat(self.n_ants, 1) # (n_ants, p_size)
         capacity_mask[demand_repeat > remaining_capacity_repeat + 1e-10] = 0
         
         return used_capacity, capacity_mask
@@ -359,7 +405,7 @@ class ACO():
         # update cur_time
         if prev_action is not None:
             cur_time = cur_time + self.distances[prev_action, cur_nodes]
-            cur_time = torch.max(cur_time, self.window[cur_nodes, 0])
+            cur_time = torch.max(cur_time, self.windows[cur_nodes, 0])
             cur_time = cur_time + self.service_time
         
         # depot -> cur_time = 0
@@ -367,7 +413,7 @@ class ACO():
         
         # update time_window_mask
         cur_time_repeat = cur_time.unsqueeze(-1).repeat(1, self.problem_size)
-        window_repeat = self.window.unsqueeze(0).repeat(self.n_ants, 1, 1)
+        window_repeat = self.windows.unsqueeze(0).repeat(self.n_ants, 1, 1)
         arrive_time = cur_time_repeat + self.distances[cur_nodes, :]
         arrive_time_in_depot = torch.max(arrive_time + self.service_time + self.distances[:, 0].unsqueeze(0).repeat(self.n_ants, 1),window_repeat[:,:,0] + self.service_time + self.distances[:, 0].unsqueeze(0).repeat(self.n_ants, 1))
         arrive_time_in_depot[:,0] = 0
@@ -382,22 +428,27 @@ class ACO():
 
     def check_done(self, visit_mask, actions):
         return (visit_mask[:, 1:] == 0).all() and (actions == 0).all()
-    
-    @cached_property
-    @torch.no_grad()
-    def distances_cpu(self):
-        return self.distances.cpu().numpy()
-    
-    @cached_property
-    @torch.no_grad()
-    def demand_cpu(self):
-        return self.demand.cpu().numpy()
-    
+
     @cached_property
     @torch.no_grad()
     def positions_cpu(self):
         return self.positions.cpu().numpy() if self.positions is not None else None
-    
+
+    @cached_property
+    @torch.no_grad()
+    def distances_cpu(self):
+        return self.distances.cpu().numpy()
+
+    @cached_property
+    @torch.no_grad()
+    def demands_cpu(self):
+        return self.demands.cpu().numpy()
+
+    @cached_property
+    @torch.no_grad()
+    def windows_cpu(self):
+        return self.windows.cpu().numpy()
+
     # ======== code for adaptive elitist AS ========
     # These code are unrelated to DeepACO, and are kept for comparisons.
     def insertion_single(self, route, index):
@@ -431,7 +482,7 @@ class ACO():
             route = subroutes[subroute_index]
             node_index = random.randint(1, len(route) - 2) # exclude depots
             pred, node, next = route[node_index - 1: node_index + 2]
-            demand = self.demand[node]
+            demand = self.demands[node]
             avaliable = demands + demand <= self.capacity
             avaliable[subroute_index] = False
             if not avaliable.any(): # no avaliable subroute
@@ -466,11 +517,11 @@ class ACO():
             sr1, sr2 = subroutes[sr1_index], subroutes[sr2_index]
             node1_index = random.randint(1, len(sr1) - 2)
             pred1, node1, next1 = sr1[node1_index - 1:node1_index + 2]
-            demand1 = self.demand[node1]
+            demand1 = self.demands[node1]
             # avaliable nodes to swap
             avaliable = torch.bitwise_and(
-                demands[sr2_index] + demand1 - self.demand[sr2] <= self.capacity,
-                demands[sr1_index] - demand1 + self.demand[sr2] <= self.capacity,
+                demands[sr2_index] + demand1 - self.demands[sr2] <= self.capacity,
+                demands[sr1_index] - demand1 + self.demands[sr2] <= self.capacity,
             )
             avaliable[0] = avaliable[-1] = False
             if not avaliable.any():
@@ -532,7 +583,7 @@ class ACO():
     def intensification_phase(self, paths, costs, best_idx):
         ogroute, ogcost = self.shortest_path, self.lowest_cost
         subroutes = get_subroutes(ogroute, end_with_zero=True)
-        demands = torch.tensor([self.demand[r].sum() for r in subroutes], device=self.device)
+        demands = torch.tensor([self.demands[r].sum() for r in subroutes], device=self.device)
         # print(*subroutes, sep='\n')
         best_neighbour = (None, 0.0)
         for func in [self.N1_neighbourhood, self.N2_neighbourhood]:
@@ -553,11 +604,3 @@ class ACO():
         self.pheromone = self.pheromone * (self.decay * 0.5) + 0.01
         for path, cost in self.elite_pool:
             self.pheromone[path[:-1], torch.roll(path, shifts=-1)[:-1]] += 1.0 / cost
-
-
-def neural_swapstar(demand, distances, heu_dist, positions, p, disturb=5, limit=10000):
-    p0 = p
-    p1 = swapstar(demand, distances, positions, p0, count = limit)
-    p2 = swapstar(demand, heu_dist, positions, p1, count = disturb)
-    p3 = swapstar(demand, distances, positions, p2, count = limit)
-    return p3

@@ -47,6 +47,7 @@ def train_instance(
         shared_energy_norm=False,
         beta=100.0,
         it=0,
+        local_search_params=None,
     ):
     model.train()
 
@@ -74,12 +75,13 @@ def train_instance(
 
         aco = ACO(
             distances=distances.to(DEVICE),
-            demand=demands.to(DEVICE),
-            window=windows.to(DEVICE),
+            demands=demands.to(DEVICE),
+            windows=windows.to(DEVICE),
             n_ants=n_ants,
             heuristic=heu_mat.to(DEVICE),
             device=DEVICE,
-            swapstar=True,
+            local_search=True,
+            local_search_params=local_search_params,
             positions=positions
         )
         
@@ -171,27 +173,26 @@ def train_instance(
     ##################################################
 
 
-def infer_instance(model, pyg_data, demands, distances, positions, windows, n_ants):
+def infer_instance(model, pyg_data, demands, distances, positions, windows, n_ants, local_search_params=None):
     model.eval()
     heu_vec = model(pyg_data)
     heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
     aco = ACO(
         distances=distances,
-        demand=demands,
-        window=windows,
+        demands=demands,
+        windows=windows,
         n_ants=n_ants,
         heuristic=heu_mat,
         device=DEVICE,
-        swapstar=True,
+        local_search=True,
+        local_search_params=local_search_params,
         positions=positions,
     )
 
     costs, _, _ = aco.sample()
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-
-    print(costs)
 
     best_aco_1, diversity_1 = aco.run(n_iterations=1)
     best_aco_T, diversity_T = aco.run(n_iterations=T - 1)
@@ -218,18 +219,21 @@ def train_epoch(
     guided_exploration=False,
     shared_energy_norm=False,
     beta=100.0,
+    local_search_params=None,
 ):
     for i in tqdm(range(steps_per_epoch), desc="Train"):
         it = (epoch - 1) * steps_per_epoch + i
         data = generate_traindata(batch_size, n_node, k_sparse)
-        train_instance(net, optimizer, data, n_ants, cost_w, invtemp, guided_exploration, shared_energy_norm, beta, it)
+        train_instance(
+            net, optimizer, data, n_ants, cost_w, invtemp, guided_exploration, shared_energy_norm, beta, it, local_search_params
+        )
 
 
 @torch.no_grad()
-def validation(val_list, n_ants, net, epoch, steps_per_epoch):
+def validation(val_list, n_ants, net, epoch, steps_per_epoch, local_search_params=None):
     stats = []
     for data, demands, distances, positions, windows in tqdm(val_list, desc="Val"):
-        stats.append(infer_instance(net, data, demands, distances, positions, windows, n_ants))
+        stats.append(infer_instance(net, data, demands, distances, positions, windows, n_ants, local_search_params))
     avg_stats = [i.item() for i in np.stack(stats).mean(0)]
 
     ##################################################
@@ -272,6 +276,7 @@ def train(
         guided_exploration=False,
         shared_energy_norm=False,
         beta_schedule_params=(50, 500, 5),  # (beta_min, beta_max, beta_flat_epochs)
+        local_search_params=None,
     ):
     savepath = os.path.join(savepath, str(n_nodes), run_name)
     os.makedirs(savepath, exist_ok=True)
@@ -285,7 +290,7 @@ def train(
     val_list = load_val_dataset(n_nodes, k_sparse, DEVICE, TAM)
     val_list = val_list[:(val_size or len(val_list))]
 
-    best_result = validation(val_list, n_val_ants, net, 0, steps_per_epoch)
+    best_result = validation(val_list, n_val_ants, net, 0, steps_per_epoch, local_search_params)
 
     sum_time = 0
     for epoch in range(1, epochs + 1):
@@ -316,11 +321,12 @@ def train(
             guided_exploration,
             shared_energy_norm,
             beta,
+            local_search_params,
         )
         sum_time += time.time() - start
 
         if epoch % val_interval == 0:
-            curr_result = validation(val_list, n_val_ants, net, epoch, steps_per_epoch)
+            curr_result = validation(val_list, n_val_ants, net, epoch, steps_per_epoch, local_search_params)
             if curr_result < best_result:
                 torch.save(net.state_dict(), os.path.join(savepath, f'best.pt'))
                 best_result = curr_result
@@ -372,14 +378,22 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### Dataset
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
+    ### LocalSearchParams
+    parser.add_argument("--n_cpus", type=int, default=1, help="Number of cpus to use")
+    parser.add_argument("--max_trials", type=int, default=10, help="Number of iterations to perform")
+    parser.add_argument("--load_penalty", type=int, default=20, help="Initial load_penalty in training phase")
+    parser.add_argument("--tw_penalty", type=int, default=20, help="Initial tw_penalty in training phase")
+    parser.add_argument("--nb_granular", type=int, default=None, help="Granularity of neighbourhood search")
 
     args = parser.parse_args()
 
     if args.k_sparse is None:
         args.k_sparse = args.nodes // 5
+    if args.nb_granular is None:
+        args.nb_granular = args.nodes // 5
 
     if args.beta_min is None:
-        beta_min_map = {100: 200, 200: 500, 400: 500, 500: 500, 1000: 2000 if args.pretrained is None else 500}
+        beta_min_map = {100: 200, 200: 500, 400: 500, 500: 500, 1000: 500 if args.pretrained is None else 2000}
         args.beta_min = beta_min_map[args.nodes]
     if args.beta_max is None:
         beta_max_map = {100: 1000, 200: 2000, 400: 2000, 500: 2000, 1000: 2000}
@@ -398,17 +412,24 @@ if __name__ == "__main__":
     ##################################################
     # wandb
     run_name = f"[{args.run_name}]" if args.run_name else ""
-    run_name += f"cvrp{args.nodes}{'-tam' if args.tam else ''}_sd{args.seed}"
+    run_name += f"cvrptw{args.nodes}{'-tam' if args.tam else ''}_sd{args.seed}"
     pretrained_name = (
-        args.pretrained.replace("../pretrained/cvrp_nls/", "").replace("/", "_").replace(".pt", "")
+        args.pretrained.replace("../pretrained/cvrptw_nls/", "").replace("/", "_").replace(".pt", "")
         if args.pretrained is not None else None
     )
     run_name += f"{'' if pretrained_name is None else '_fromckpt-'+pretrained_name}"
     if USE_WANDB:
-        wandb.init(project=f"gfacs-cvrp_nls", name=run_name)
+        wandb.init(project=f"gfacs-cvrptw_nls", name=run_name)
         wandb.config.update(args)
         wandb.config.update({"T": T, "model": "GFACS", "tam": TAM})
     ##################################################
+    
+    local_search_params = {
+        "n_cpus": args.n_cpus,
+        "max_trials": args.max_trials,
+        "neighbourhood_params": {"nb_granular": args.nb_granular},
+        "cost_evaluator_params": {"load_penalty": args.load_penalty, "tw_penalty": args.tw_penalty},
+    } if not args.disable_guided_exp else None
 
     train(
         args.nodes,
@@ -429,4 +450,5 @@ if __name__ == "__main__":
         guided_exploration=(not args.disable_guided_exp),
         shared_energy_norm=(not args.disable_shared_energy_norm),
         beta_schedule_params=(args.beta_min, args.beta_max, args.beta_flat_epochs),
+        local_search_params=local_search_params,
     )

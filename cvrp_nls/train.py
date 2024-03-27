@@ -360,7 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta_max", type=float, default=None, help='Beta max for GFACS')
     parser.add_argument("--beta_flat_epochs", type=int, default=5, help='Beta flat epochs for GFACS')
     ### Energy Reshaping
-    parser.add_argument("--cost_w_min", type=float, default=0.5, help='Cost weight min for GFACS')
+    parser.add_argument("--cost_w_min", type=float, default=None, help='Cost weight min for GFACS')
     parser.add_argument("--cost_w_max", type=float, default=1.0, help='Cost weight max for GFACS')
     parser.add_argument("--cost_w_flat_epochs", type=int, default=5, help='Cost weight flat epochs for GFACS')
     ### Seed
@@ -379,6 +379,9 @@ if __name__ == "__main__":
     if args.beta_max is None:
         beta_max_map = {100: 1000, 200: 2000, 400: 2000, 500: 2000, 1000: 2000}
         args.beta_max = beta_max_map[args.nodes]
+
+    if args.cost_w_min is None:
+        args.cost_w_min = 0.5 if args.pretrained is None else 0.8
 
     DEVICE = args.device if torch.cuda.is_available() else "cpu"
     USE_WANDB = not args.disable_wandb

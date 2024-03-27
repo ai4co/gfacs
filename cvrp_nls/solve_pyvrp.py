@@ -3,7 +3,7 @@ import os
 import pickle
 
 import numpy as np
-from pyvrp import Model, ProblemData, Client, VehicleType
+from pyvrp import Model, ProblemData, Client, Depot, VehicleType
 from pyvrp.stop import MaxIterations
 
 from utils import load_val_dataset, load_test_dataset, get_capacity
@@ -68,8 +68,8 @@ if __name__ == "__main__":
     def solve_problem(inputs):
         loc, demand, distance = inputs
         data = ProblemData(
-            clients=[Client(x=l[0], y=l[1], demand=d) for l, d in zip(loc[1:], demand)],
-            depots=[Client(x=loc[0][0], y=loc[0][1])],
+            clients=[Client(x=l[0], y=l[1], delivery=d) for l, d in zip(loc[1:], demand)],
+            depots=[Depot(x=loc[0][0], y=loc[0][1])],
             vehicle_types=[
                 VehicleType(len(loc) - 1, capacity, 0, name=",".join(map(str, range(1, len(loc)))))
             ],
