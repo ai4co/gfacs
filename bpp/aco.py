@@ -125,7 +125,7 @@ class ACO():
         '''
         Args:
             sols: torch tensor with shape (problem_size, n_ants)
-            costs: torch tensor with shape (n_ants,)
+            fits: torch tensor with shape (n_ants,)
         '''
         self.pheromone = self.pheromone * self.decay 
         

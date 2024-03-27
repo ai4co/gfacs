@@ -241,8 +241,8 @@ def train(
     os.makedirs(savepath, exist_ok=True)
 
     net = Net(gfn=True, Z_out_dim=2 if guided_exploration else 1).to(DEVICE)
-    if pretrained is not None:
-        raise NotImplementedError("Need some more work to load pretrained model")
+    if pretrained:
+        net.load_state_dict(torch.load(pretrained, map_location=DEVICE))
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=lr * 0.1)
 

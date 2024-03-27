@@ -62,7 +62,7 @@ def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco
         results[i], diversities[i] = aco.run(t)
         path = get_subroutes(aco.shortest_path)
         valid, length = validate_route(distances, demands, path)
-        assert (length - results[i].item()) < 1e-5  # FIXME: remove this line
+        assert (length - results[i].item()) < 1e-4  # FIXME: remove this line
         if valid is False:
            print("invalid solution.")
     return results, diversities

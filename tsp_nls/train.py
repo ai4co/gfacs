@@ -340,7 +340,7 @@ if __name__ == "__main__":
         args.k_sparse = args.nodes // 10
 
     if args.beta_min is None:
-        beta_min_map = {200: 200, 500: 200, 1000: 1000 if args.pretrained is None else 200}
+        beta_min_map = {200: 200, 500: 200, 1000: 200 if args.pretrained is None else 1000}
         args.beta_min = beta_min_map[args.nodes]
     if args.beta_max is None:
         beta_max_map = {200: 1000, 500: 1000, 1000: 1000}

@@ -127,6 +127,8 @@ if __name__ == "__main__":
     parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    ### Dataset
+    parser.add_argument("--dataset", type=str, default="X", help="Dataset name")
     args = parser.parse_args()
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
@@ -148,5 +150,6 @@ if __name__ == "__main__":
         args.n_ants,
         args.n_iter,
         not args.disable_guided_exp,
-        args.seed
+        args.seed,
+        args.dataset,
     )

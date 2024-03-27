@@ -93,7 +93,7 @@ class ACO():
         if self.adaptive:
             self.elite_pool = []
 
-        self.heuristic = 1 / distances if heuristic is None else heuristic
+        self.heuristic = 1 / (distances + 1e-10) if heuristic is None else heuristic
 
         self.shortest_path = None
         self.lowest_cost = float('inf')
