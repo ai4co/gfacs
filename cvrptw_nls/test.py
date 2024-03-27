@@ -76,7 +76,7 @@ def infer_instance(
 
 
 @torch.no_grad()
-def test(dataset, model, n_ants, t_aco):
+def test(dataset, model, n_ants, t_aco, local_search_params):
     _t_aco = [0] + t_aco
     t_aco_diff = [_t_aco[i + 1] - _t_aco[i] for i in range(len(_t_aco) - 1)]
 
@@ -85,7 +85,7 @@ def test(dataset, model, n_ants, t_aco):
     start = time.time()
     for pyg_data, demands, distances, positions, windows in tqdm(dataset):
         results, diversities = infer_instance(
-            model, pyg_data, demands, distances, positions, windows, n_ants, t_aco_diff
+            model, pyg_data, demands, distances, positions, windows, n_ants, t_aco_diff, local_search_params
         )
         sum_results += results
         sum_diversities += diversities
@@ -93,7 +93,17 @@ def test(dataset, model, n_ants, t_aco):
     return sum_results / len(dataset), sum_diversities / len(dataset), end - start
 
 
-def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_exploration=False, seed=0):
+def main(
+    ckpt_path,
+    n_nodes,
+    k_sparse,
+    size=None,
+    n_ants=100,
+    n_iter=10,
+    guided_exploration=False,
+    seed=0,
+    local_search_params=None,
+):
     test_list = load_test_dataset(n_nodes, k_sparse, DEVICE, TAM)
     test_list = test_list[:(size or len(test_list))]
 
@@ -110,7 +120,7 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
         net.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
     else:
         net = None
-    avg_cost, avg_diversity, duration = test(test_list, net, n_ants, t_aco)
+    avg_cost, avg_diversity, duration = test(test_list, net, n_ants, t_aco, local_search_params)
     print('total duration: ', duration)
     for i, t in enumerate(t_aco):
         print(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}")
@@ -159,11 +169,19 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### Dataset
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
+    ### LocalSearchParams
+    parser.add_argument("--n_cpus", type=int, default=1, help="Number of cpus to use")
+    parser.add_argument("--max_trials", type=int, default=10, help="Number of iterations to perform")
+    parser.add_argument("--load_penalty", type=int, default=20, help="Initial load_penalty in training phase")
+    parser.add_argument("--tw_penalty", type=int, default=20, help="Initial tw_penalty in training phase")
+    parser.add_argument("--nb_granular", type=int, default=None, help="Granularity of neighbourhood search")
 
     args = parser.parse_args()
 
     if args.k_sparse is None:
         args.k_sparse = args.nodes // 5
+    if args.nb_granular is None:
+        args.nb_granular = args.nodes // 5
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
     TAM = args.tam
@@ -178,6 +196,13 @@ if __name__ == "__main__":
         print(f"Checkpoint file '{args.path}' not found!")
         exit(1)
 
+    local_search_params = {
+        "n_cpus": args.n_cpus,
+        "max_trials": args.max_trials,
+        "neighbourhood_params": {"nb_granular": args.nb_granular},
+        "cost_evaluator_params": {"load_penalty": args.load_penalty, "tw_penalty": args.tw_penalty},
+    }
+
     main(
         args.path,
         args.nodes,
@@ -186,5 +211,6 @@ if __name__ == "__main__":
         args.n_ants,
         args.n_iter,
         not args.disable_guided_exp,
-        args.seed
+        args.seed,
+        local_search_params,
     )
