@@ -23,8 +23,10 @@ def save_dataset(dataset, filename):
 
 
 if __name__ == "__main__":
+    from tqdm import tqdm
+    from concurrent.futures import ProcessPoolExecutor
+    import concurrent.futures
     import argparse
-    import multiprocessing
 
     parser = argparse.ArgumentParser()
     parser.add_argument("nodes", type=int, help="Problem scale")
@@ -85,10 +87,12 @@ if __name__ == "__main__":
         result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed, display=False)
         return result
 
-    pool = multiprocessing.Pool(opt.n_cpus)
-    results = pool.map(solve_problem, zip(locs, demands, distances, windows))
-    pool.close()
-    pool.join()
+    results = []
+    with tqdm(total=len(locs)) as pbar, ProcessPoolExecutor(max_workers=opt.n_cpus) as executor:
+        futures = [executor.submit(solve_problem, inputs) for inputs in zip(locs, demands, distances, windows)]
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+            pbar.update(1)
 
     costs = [result.cost() / 10**4 for result in results]
     runtimes = [result.runtime for result in results]
