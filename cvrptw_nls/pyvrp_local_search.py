@@ -1,10 +1,10 @@
 from functools import partial
-from typing import List, Tuple
-import multiprocessing
+from typing import Tuple
+import concurrent.futures
 
 import numpy as np
 
-from pyvrp import Client, CostEvaluator, Depot, ProblemData, RandomNumberGenerator, Route, Solution, VehicleType
+from pyvrp import Client, CostEvaluator, Depot, ProblemData, RandomNumberGenerator, Solution, VehicleType
 from pyvrp.search import LocalSearch, NODE_OPERATORS, ROUTE_OPERATORS, compute_neighbours, NeighbourhoodParams
 
 
@@ -133,11 +133,11 @@ def pyvrp_batched_local_search(
         inference=inference,
         seed=seed,
     )
+
     if n_cpus > 1:
-        pool = multiprocessing.Pool(n_cpus)
-        new_paths = pool.map(partial_func, paths)
-        pool.close()
-        pool.join()
+        raise NotImplementedError("Multiprocessing is not very efficient for local search, so disabled for now.")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_cpus) as executor:
+            new_paths = list(executor.map(partial_func, paths))
     else:
         new_paths = [partial_func(path) for path in paths]
 
