@@ -14,7 +14,7 @@ For the usage of the code, please refer to each folder's `README.md` file.
 ## Citation
 If you find our work useful in your research, please consider citing our paper:
 ```
-@article{,
+@article{kim2024gfacs_ant_colony_optimization,
   title={Ant Colony Sampling with GFlowNets for Combinatorial Optimization},
   author={Minsu Kim and Sanghyeok Choi and Jiwoo Son and Hyeonah Kim and Jinkyoo Park and Yoshua Bengio},
   journal={arXiv preprint arXiv:2403.07041},
