@@ -82,14 +82,14 @@ def pyvrp_local_search(
     ls_operator = make_search_operator(data, seed, neighbourhood_params)
 
     cost_evaluator_params = {
-        "load_penalty": (200 if inference else 20) * 10**4,
-        "tw_penalty": (200 if inference else 20) * 10**4,
+        "load_penalty": (5 if inference else 20) * 10**4,
+        "tw_penalty": (5 if inference else 20) * 10**4,
         "dist_penalty": 0,
     }
     cost_evaluator_params.update(cost_evaluator_params or {})
 
     improved_solution, is_feasible = perform_local_search(
-        ls_operator, solution, cost_evaluator_params, remaining_trials=max_trials
+        ls_operator, solution, cost_evaluator_params, remaining_trials=max_trials * (2 if inference else 1)
     )
 
     # Return the original path if no feasible solution is found
@@ -135,7 +135,6 @@ def pyvrp_batched_local_search(
     )
 
     if n_cpus > 1:
-        raise NotImplementedError("Multiprocessing is not very efficient for local search, so disabled for now.")
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_cpus) as executor:
             new_paths = list(executor.map(partial_func, paths))
     else:

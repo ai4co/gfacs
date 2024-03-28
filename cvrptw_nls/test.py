@@ -127,10 +127,10 @@ def main(
 
     # Save result in directory that contains model_file
     filename = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path is not None else 'none'
-    dirname = os.path.dirname(ckpt_path) if ckpt_path is not None else f'../pretrained/cvrp_nls/{args.nodes}/no_model'
+    dirname = os.path.dirname(ckpt_path) if ckpt_path is not None else f'../pretrained/cvrptw_nls/{args.nodes}/no_model'
     os.makedirs(dirname, exist_ok=True)
 
-    result_filename = f"test_result_ckpt{filename}-cvrp{n_nodes}-ninst{size}-nants{n_ants}-niter{n_iter}-seed{seed}"
+    result_filename = f"test_result_ckpt{filename}-cvrptw{n_nodes}-ninst{size}-nants{n_ants}-niter{n_iter}-seed{seed}"
     result_file = os.path.join(dirname, result_filename + ".txt")
     with open(result_file, "w") as f:
         f.write(f"problem scale: {n_nodes}\n")
