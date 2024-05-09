@@ -32,7 +32,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse):
         local_search_type="nls",
         elitist=ACOALG == "ELITIST",
         maxmin=ACOALG == "MAXMIN",
-        rank_based=ACOALG == "RANKBASED",
+        rank_based=ACOALG == "RANK",
     )
 
     results = np.zeros(shape=(len(t_aco_diff),))
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### ACO
-    parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANKBASED"], help="ACO algorithm")
+    parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
     args = parser.parse_args()
 
     if args.k_sparse is None:
