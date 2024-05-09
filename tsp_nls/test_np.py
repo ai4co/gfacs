@@ -52,7 +52,6 @@ def test(dataset, model, n_ants, t_aco, k_sparse):
     sum_results = np.zeros(shape=(len(t_aco_diff), ))
     sum_diversities = np.zeros(shape=(len(t_aco_diff), ))
     sum_times = 0
-
     for pyg_data, distances in tqdm(dataset):
         results, diversities, elapsed_time = infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse)
         sum_results += results

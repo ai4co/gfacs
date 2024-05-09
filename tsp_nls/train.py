@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from net import Net
-from aco import ACO
+from aco import ACO, ACO_NP
 from utils import gen_pyg_data, load_val_dataset
 
 import wandb
@@ -145,11 +145,10 @@ def infer_instance(model, pyg_data, distances, n_ants):
     heu_vec = model(pyg_data)
     heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
-    aco = ACO(
+    aco = ACO_NP(
         distances.cpu(),
         n_ants,
         heuristic=heu_mat.cpu(),
-        device='cpu',
         local_search_type='nls'
     )
 
