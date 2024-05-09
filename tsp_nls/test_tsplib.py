@@ -1,6 +1,5 @@
 import os
 import random
-import time
 
 from tqdm import tqdm
 import numpy as np
@@ -30,14 +29,16 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
         n_ants,
         heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
         device='cpu',
-        local_search='nls',
+        local_search_type='nls',
     )
 
     results = torch.zeros(size=(len(t_aco_diff),))
+    elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        cost, _ = aco.run(t, inference=True, start_node=START_NODE)
+        cost, _, t = aco.run(t, inference=True, start_node=START_NODE)
         results[i] = cost
-    return results, aco.shortest_path
+        elapsed_time += t
+    return results, aco.shortest_path, elapsed_time
 
 
 @torch.no_grad()
@@ -47,14 +48,14 @@ def test(dataset, scale_list, model, n_ants, t_aco):
 
     results_list = []
     best_paths = []
-    start = time.time()
+    sum_times = 0
     for (pyg_data, distances), scale in tqdm(zip(dataset, scale_list)):
         ceiled_distances = (distances * scale).ceil()
-        results, best_path = infer_instance(model, pyg_data, ceiled_distances, n_ants, t_aco_diff)
+        results, best_path, elapsed_time = infer_instance(model, pyg_data, ceiled_distances, n_ants, t_aco_diff)
         results_list.append(results)
         best_paths.append(best_path)
-    end = time.time()
-    return results_list, best_paths, end - start
+        sum_times += elapsed_time
+    return results_list, best_paths, sum_times / len(dataset)
 
 
 def make_tsplib_data(filename, episode):
@@ -113,7 +114,7 @@ def main(ckpt_path, n_nodes, k_sparse_factor=10, n_ants=100, n_iter=10, guided_e
         tsp_results = np.sum(tour_length)
         results_df.loc[tsp_name, :] = tsp_results
 
-    print('total duration: ', duration)
+    print('average inference time: ', duration)
 
     # Save result in directory that contains model_file
     filename = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path is not None else 'none'

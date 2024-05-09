@@ -55,7 +55,7 @@ def train_instance(
         else:
             logZ = logZs[0]
 
-        aco = ACO(distances, n_ants, heuristic=heu_mat, device=DEVICE, local_search='nls')
+        aco = ACO(distances, n_ants, heuristic=heu_mat, device=DEVICE, local_search_type='nls')
 
         costs_raw, log_probs, paths_raw = aco.sample(invtemp=invtemp, start_node=START_NODE)
         advantage_raw = (costs_raw - (costs_raw.mean() if shared_energy_norm else 0.0))
@@ -150,14 +150,14 @@ def infer_instance(model, pyg_data, distances, n_ants):
         n_ants,
         heuristic=heu_mat.cpu(),
         device='cpu',
-        local_search='nls'
+        local_search_type='nls'
     )
 
     costs = aco.sample(inference=True, start_node=START_NODE)[0]
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-    best_aco_1, diversity_1 = aco.run(n_iterations=1, inference=True, start_node=START_NODE)
-    best_aco_T, diversity_T = aco.run(n_iterations=T - 1, inference=True, start_node=START_NODE)
+    best_aco_1, diversity_1, _ = aco.run(n_iterations=1, inference=True, start_node=START_NODE)
+    best_aco_T, diversity_T, _ = aco.run(n_iterations=T - 1, inference=True, start_node=START_NODE)
     return np.array([baseline, best_sample_cost, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 

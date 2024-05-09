@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 
 from net import Net
-from aco import ACO
+from aco import ACO_NP
 from utils import load_test_dataset
 
 
@@ -22,22 +22,21 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse):
         model.eval()
         heu_vec = model(pyg_data)
         heu_mat = model.reshape(pyg_data, heu_vec) + EPS
-        heu_mat = heu_mat.cpu()
+        heu_mat = heu_mat.cpu().numpy()
 
-    aco = ACO(
-        distances.cpu(),
+    aco = ACO_NP(
+        distances.cpu().numpy(),
         n_ants,
         heuristic=heu_mat,
         k_sparse=k_sparse,
-        device="cpu",
         local_search_type="nls",
         elitist=ACOALG == "ELITIST",
         maxmin=ACOALG == "MAXMIN",
         rank_based=ACOALG == "RANKBASED",
     )
 
-    results = torch.zeros(size=(len(t_aco_diff),))
-    diversities = torch.zeros(size=(len(t_aco_diff),))
+    results = np.zeros(shape=(len(t_aco_diff),))
+    diversities = np.zeros(shape=(len(t_aco_diff),))
     elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
         results[i], diversities[i], t = aco.run(t, inference=True, start_node=START_NODE)
@@ -50,9 +49,10 @@ def test(dataset, model, n_ants, t_aco, k_sparse):
     _t_aco = [0] + t_aco
     t_aco_diff = [_t_aco[i + 1] - _t_aco[i] for i in range(len(_t_aco) - 1)]
 
-    sum_results = torch.zeros(size=(len(t_aco_diff), ))
-    sum_diversities = torch.zeros(size=(len(t_aco_diff), ))
+    sum_results = np.zeros(shape=(len(t_aco_diff), ))
+    sum_diversities = np.zeros(shape=(len(t_aco_diff), ))
     sum_times = 0
+
     for pyg_data, distances in tqdm(dataset):
         results, diversities, elapsed_time = infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse)
         sum_results += results
@@ -69,7 +69,7 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
     print("problem scale:", n_nodes)
     print("checkpoint:", ckpt_path)
     print("number of instances:", size)
-    print("device:", 'cpu' if DEVICE == 'cpu' else DEVICE+"+cpu" )
+    print("device:", "cpu" if DEVICE == "cpu" else DEVICE+"+cpu" )
     print("n_ants:", n_ants)
     print("seed:", seed)
 
@@ -84,8 +84,8 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
         print(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}")
 
     # Save result in directory that contains model_file
-    filename = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path is not None else 'none'
-    dirname = os.path.dirname(ckpt_path) if ckpt_path is not None else f'../pretrained/tsp_nls/{args.nodes}/no_model'
+    filename = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path is not None else "none"
+    dirname = os.path.dirname(ckpt_path) if ckpt_path is not None else f"../pretrained/tsp_nls/{args.nodes}/no_model"
     os.makedirs(dirname, exist_ok=True)
 
     result_filename = f"test_result_ckpt{filename}-tsp{n_nodes}-ninst{size}-{ACOALG}-nants{n_ants}-niter{n_iter}-seed{seed}{'-'+test_name if test_name else ''}"
@@ -101,10 +101,10 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
         for i, t in enumerate(t_aco):
             f.write(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}\n")
 
-    results = pd.DataFrame(columns=['T', 'avg_cost', 'avg_diversity'])
-    results['T'] = t_aco
-    results['avg_cost'] = avg_cost
-    results['avg_diversity'] = avg_diversity
+    results = pd.DataFrame(columns=["T", "avg_cost", "avg_diversity"])
+    results["T"] = t_aco
+    results["avg_cost"] = avg_cost
+    results["avg_diversity"] = avg_diversity
     results.to_csv(os.path.join(dirname, result_filename + ".csv"), index=False)
 
 
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--size", type=int, default=None, help="Number of instances to test")
     parser.add_argument("--test_name", type=str, default="", help="Name of the test")
     ### GFACS
-    parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
+    parser.add_argument("--disable_guided_exp", action="store_true", help="True for model w/o guided exploration.")
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### ACO
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     if args.k_sparse is None:
         args.k_sparse = args.nodes // 10
 
-    DEVICE = args.device if torch.cuda.is_available() else 'cpu'
+    DEVICE = args.device if torch.cuda.is_available() else "cpu"
     ACOALG = args.aco
 
     # seed everything
