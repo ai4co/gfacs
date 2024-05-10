@@ -146,9 +146,9 @@ def infer_instance(model, pyg_data, distances, n_ants):
     heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
     aco = ACO_NP(
-        distances.cpu(),
+        distances.cpu().numpy(),
         n_ants,
-        heuristic=heu_mat.cpu(),
+        heuristic=heu_mat.cpu().numpy(),
         local_search_type='nls'
     )
 

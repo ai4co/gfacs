@@ -480,7 +480,8 @@ class ACO_NP():
         self.pheromone = self.pheromone * self.decay
             
         if self.elitist:
-            best_delta, best_idx = deltas.max(axis=0)
+            best_idx = deltas.argmax(axis=0)
+            best_delta = deltas[best_idx]
             best_tour= paths[best_idx, :]
             self.pheromone[best_tour, np.roll(best_tour, shift=1)] += best_delta
             self.pheromone[np.roll(best_tour, shift=1), best_tour] += best_delta
@@ -516,7 +517,7 @@ class ACO_NP():
         if self.maxmin:
             _max = _max = 1 / ((1 - self.decay) * self.lowest_cost)
             _min = _max * (1 - (0.05 ** (1 / self.problem_size))) / (0.5 * self.problem_size - 1)
-            self.pheromone = np.clip(self.pheromone, min=_min, max=_max)  # type: ignore
+            self.pheromone = self.pheromone.clip(min=_min, max=_max)
             # check convergence
             if (self.pheromone[self.shortest_path, np.roll(self.shortest_path, shift=1)] >= _max * 0.99).all():  # type: ignore
                 self.pheromone = 0.5 * self.pheromone + 0.5 * _max

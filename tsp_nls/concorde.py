@@ -129,7 +129,7 @@ def run_all_in_pool(func, directory, dataset, n_cpus=None, use_multiprocessing=T
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("nodes", type=int, help="Problem scale")
-    parser.add_argument("--type", type=str, default="val", help="Dataset type")
+    parser.add_argument("--type", type=str, default="test", help="Dataset type")
     parser.add_argument("--result_dir", type=str, default="concorde/results", help="Result directory")
     parser.add_argument("--size", type=int, default=None, help="Number of instances to solve")
 
