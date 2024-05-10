@@ -1,12 +1,12 @@
+import concurrent.futures
+import time
+from functools import cached_property
+from itertools import combinations
+
 import torch
 from torch.distributions import Categorical
-import random
-import itertools
-import numpy as np
+
 from swapstar import swapstar
-from functools import cached_property
-import concurrent.futures
-from itertools import combinations
 
 
 CAPACITY = 1.0 # The input demands shall be normalized
@@ -40,143 +40,137 @@ def merge_subroutes(subroutes, length, device):
 class ACO():
     def __init__(
         self,  # 0: depot
-        distances, # (n, n)
-        demand,   # (n, )
-        n_ants=20, 
+        distances: torch.Tensor,  # (n, n)
+        demand: torch.Tensor,  # (n, )
+        capacity=CAPACITY,
+        positions = None,
+        n_ants=20,
+        heuristic: torch.Tensor | None = None,
+        k_sparse=None,
+        pheromone: torch.Tensor | None = None,
         decay=0.9,
         alpha=1,
         beta=1,
+        # AS variants
         elitist=False,
-        min_max=False,
-        pheromone=None,
-        heuristic=None,
-        min=None,
+        maxmin=False,
+        rank_based=False,
+        n_elites=None,
+        smoothing=False,
+        smoothing_thres=5,
+        smoothing_delta=0.5,
+        shift_cost=True,
+        local_search_type: str | None = 'nls',
         device='cpu',
-        adaptive=False,
-        capacity=CAPACITY,
-        swapstar = False,
-        positions = None,
     ):
-        
         self.problem_size = len(distances)
         self.distances = distances
-        self.capacity = capacity
         self.demand = demand
+        self.capacity = capacity
+        self.positions = positions
         
         self.n_ants = n_ants
         self.decay = decay
         self.alpha = alpha
         self.beta = beta
-        self.elitist = elitist or adaptive
-        self.min_max = min_max
-        self.adaptive = adaptive
-        self.swapstar = swapstar
-        self.positions = positions
+        self.elitist = elitist or maxmin  # maxmin uses elitist
+        self.maxmin = maxmin
+        self.rank_based = rank_based
+        self.n_elites = n_elites or n_ants // 10
 
-        assert positions is not None if swapstar else True
-        
-        if min_max:
-            if min is not None:
-                assert min > 1e-9
-            else:
-                min = 0.1
-            self.min = min
-            self.max = None
-        
+        # Smoothing
+        self.smoothing = smoothing
+        self.smoothing_cnt = 0
+        self.smoothing_thres = smoothing_thres
+        self.smoothing_delta = smoothing_delta
+        self.shift_cost = shift_cost
+        self.device = device
+
         if pheromone is None:
             self.pheromone = torch.ones_like(self.distances)
-            if min_max:
-                self.pheromone = self.pheromone * self.min
+            # if maxmin:
+            #     self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
         else:
-            self.pheromone = pheromone
-        
-        if self.adaptive:
-            self.elite_pool = []
+            self.pheromone = pheromone.to(device)
+
+        if heuristic is None:
+            assert k_sparse is not None
+            self.heuristic = self.simple_heuristic(distances, k_sparse)
+        else:
+            self.heuristic = heuristic.to(device)
 
         self.heuristic = 1 / (distances + 1e-10) if heuristic is None else heuristic
 
         self.shortest_path = None
         self.lowest_cost = float('inf')
 
-        self.device = device
+        assert local_search_type in [None, "nls", "swapstar"]
+        assert positions is not None if local_search_type is not None else True
+        self.local_search_type = local_search_type
+
+    @torch.no_grad()
+    def simple_heuristic(self, distances, k_sparse):
+        '''
+        Sparsify the TSP graph to obtain the heuristic information 
+        Used for vanilla ACO baselines
+        '''
+        n = self.demand.size(0)
+        temp_dists = distances.clone()
+        temp_dists[1:, 1:][torch.eye(n - 1, dtype=torch.bool, device=self.device)] = 1e9
+        # sparsify
+        # part 1:
+        _, topk_indices = torch.topk(temp_dists[1:, 1:], k = k_sparse, dim=1, largest=False)
+        edge_index_1 = torch.stack([
+            torch.repeat_interleave(torch.arange(n - 1).to(topk_indices.device), repeats=k_sparse),
+            torch.flatten(topk_indices)
+        ]) + 1
+        # part 2: keep all edges connected to depot
+        edge_index_2 = torch.stack([ 
+            torch.zeros(n - 1, device=self.device, dtype=torch.long), 
+            torch.arange(1, n, device=self.device, dtype=torch.long),
+        ])
+        edge_index_3 = torch.stack([ 
+            torch.arange(1, n, device=self.device, dtype=torch.long),
+            torch.zeros(n - 1, device=self.device, dtype=torch.long), 
+        ])
+        edge_index = torch.concat([edge_index_1, edge_index_2, edge_index_3], dim=1)
+
+        sparse_distances = torch.ones_like(distances) * 1e10
+        sparse_distances[edge_index[0], edge_index[1]] = distances[edge_index[0], edge_index[1]]
+
+        heuristic = 1 / sparse_distances
+        return heuristic
 
     def sample(self, invtemp=1.0):
         paths, log_probs = self.gen_path(require_prob=True, invtemp=invtemp)  # type: ignore
         costs = self.gen_path_costs(paths)
         return costs, log_probs, paths
 
-    def sample_nls(self, invtemp=1.0):
-        paths, log_probs = self.gen_path(require_prob=True, invtemp=invtemp)  # type: ignore
-        paths_raw = paths.clone()
-        costs_raw = self.gen_path_costs(paths_raw).detach()
-        self.multiple_swap_star(paths)
-        costs = self.gen_path_costs(paths).detach()
-        return costs, log_probs, paths, costs_raw, paths_raw
-
-    @torch.no_grad()
-    def multiple_swap_star(self, paths, indexes=None, inference=False):
-        subroutes_all = []
-        for i in range(paths.size(1)) if indexes is None else indexes:
-            subroutes = get_subroutes(paths[:, i])
-            subroutes_all.append((i, subroutes))
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = []
-            for i, p in subroutes_all:
-                future = executor.submit(
-                    neural_swapstar,
-                    self.demand_cpu,
-                    self.distances_cpu,
-                    self.heuristic_dist,
-                    self.positions_cpu,
-                    p,
-                    limit=10000 if inference else self.problem_size // 10
-                )
-                futures.append((i, future))
-            for i, future in futures:
-                paths[:, i] = merge_subroutes(future.result(), paths.size(0), self.device)
-
-    @cached_property
-    @torch.no_grad()
-    def heuristic_dist(self):
-        heu = self.heuristic.detach().cpu().numpy()  # type: ignore
-        return (1 / (heu/heu.max(-1, keepdims=True) + 1e-5))
+    def local_search(self, paths, inference=False):
+        new_paths = paths.clone()
+        self.multiple_swap_star(new_paths, inference=inference)
+        return new_paths
 
     @torch.no_grad()
     def run(self, n_iterations):
+        assert n_iterations > 0
+
+        start = time.time()
         for _ in range(n_iterations):
             paths = self.gen_path(require_prob=False)
             _paths = paths.clone()   # type: ignore
 
-            if self.adaptive:
-                self.improvement_phase(paths, costs)
-            
-            if self.swapstar:
+            if self.local_search_type is not None:
                 self.multiple_swap_star(paths, inference=True)
-
             costs = self.gen_path_costs(paths)
 
-            improved = False
             best_cost, best_idx = costs.min(dim=0)
             if best_cost < self.lowest_cost:
                 self.shortest_path = paths[:, best_idx].clone()  # type: ignore
                 self.lowest_cost = best_cost.item()
-                if self.adaptive:
-                    self.intensification_phase(paths, costs, best_idx)
-                if self.min_max:
-                    max = self.problem_size / self.lowest_cost
-                    if self.max is None:
-                        self.pheromone *= max / self.pheromone.max()
-                    self.max = max
-                improved = True
 
-            if not self.adaptive or improved:           
-                self.update_pheromone(paths, costs)
-                if self.adaptive:
-                    self.elite_pool.insert(0, (self.shortest_path, self.lowest_cost))
-                    if len(self.elite_pool) > 5:  # pool_size = 5
-                        del self.elite_pool[5:]
-            else:
-                self.diversification_phase()
+            self.update_pheromone(paths, costs)
+        end = time.time()
 
         # Pairwise Jaccard similarity between paths
         edge_sets = []
@@ -190,7 +184,7 @@ class ACO():
             jaccard_sum += len(edge_sets[i] & edge_sets[j]) / len(edge_sets[i] | edge_sets[j])
         diversity = 1 - jaccard_sum / (len(edge_sets) * (len(edge_sets) - 1) / 2)
 
-        return self.lowest_cost, diversity
+        return self.lowest_cost, diversity, end - start
 
     @torch.no_grad()
     def update_pheromone(self, paths, costs):
@@ -199,25 +193,66 @@ class ACO():
             paths: torch tensor with shape (problem_size, n_ants)
             costs: torch tensor with shape (n_ants,)
         '''
-        self.pheromone = self.pheromone * self.decay 
-        
+        deltas = 1.0 / costs
+        if self.shift_cost:
+            total_delta_phe = self.pheromone.sum() * (1 - self.decay)
+            n_ants_for_update = self.n_ants if not (self.elitist or self.rank_based) else 1
+            shifter = - deltas.mean() + total_delta_phe / (2 * n_ants_for_update * (paths.shape[0] - 1))
+
+            deltas = deltas + shifter
+            deltas = deltas.clamp(min=1e-10)
+            delta_gb = (1.0 / self.lowest_cost) + shifter
+
+        self.pheromone = self.pheromone * self.decay
+
         if self.elitist:
-            best_cost, best_idx = costs.min(dim=0)
-            best_tour = paths[:, best_idx]
-            self.pheromone[best_tour[:-1], torch.roll(best_tour, shifts=-1)[:-1]] += 1.0/best_cost
-        
+            best_delta, best_idx = deltas.max(dim=0)
+            best_tour= paths[:, best_idx]
+            self.pheromone[best_tour[:-1], torch.roll(best_tour, shifts=1)[:-1]] += best_delta
+            self.pheromone[torch.roll(best_tour, shifts=1)[:-1], best_tour[:-1]] += best_delta
+
+        elif self.rank_based:
+            # Rank-based pheromone update
+            elite_indices = torch.argsort(deltas, descending=True)[:self.n_elites]
+            elite_paths = paths[:, elite_indices]
+            elite_deltas = deltas[elite_indices]
+            if self.lowest_cost < costs.min():
+                elite_paths = torch.cat([self.shortest_path.unsqueeze(1), elite_paths[:, :-1]], dim=1)  # type: ignore
+                elite_deltas = torch.cat([torch.tensor([delta_gb], device=self.device), elite_deltas[:-1]])
+
+            rank_denom = (self.n_elites * (self.n_elites + 1)) / 2
+            for i in range(self.n_elites):
+                path = elite_paths[:, i]
+                delta = elite_deltas[i] * (self.n_elites - i) / rank_denom
+                self.pheromone[path[:-1], torch.roll(path, shifts=1)[:-1]] += delta
+                self.pheromone[torch.roll(path, shifts=1)[:-1], path[:-1]] += delta
+
         else:
             for i in range(self.n_ants):
                 path = paths[:, i]
-                cost = costs[i]
-                self.pheromone[path[:-1], torch.roll(path, shifts=-1)[:-1]] += 1.0/cost
-                
-        if self.min_max:
-            self.pheromone[(self.pheromone > 1e-9) * (self.pheromone) < self.min] = self.min
-            self.pheromone[self.pheromone > self.max] = self.max  # type: ignore
-        
+                delta = deltas[i]
+                self.pheromone[path[:-1], torch.roll(path, shifts=1)[:-1]] += delta
+                self.pheromone[torch.roll(path, shifts=1)[:-1], path[:-1]] += delta
+
+        if self.maxmin:
+            _max = _max = 1 / ((1 - self.decay) * self.lowest_cost)
+            p_dec = 0.05 ** (1 / self.problem_size)
+            _min = _max * (1 - p_dec) / (0.5 * self.problem_size - 1) / p_dec
+            self.pheromone = torch.clamp(self.pheromone, min=_min, max=_max)
+            # check convergence
+            if (self.pheromone[self.shortest_path, torch.roll(self.shortest_path, shifts=1)] >= _max * 0.99).all():  # type: ignore
+                self.pheromone = 0.5 * self.pheromone + 0.5 * _max
+
+        else:  # maxmin has its own smoothing
+            # smoothing the pheromone if the lowest cost has not been updated for a while
+            if self.smoothing:
+                self.smoothing_cnt = max(0, self.smoothing_cnt + (1 if self.lowest_cost < costs.min() else -1))
+                if self.smoothing_cnt >= self.smoothing_thres:
+                    self.pheromone = self.smoothing_delta * self.pheromone + (self.smoothing_delta) * torch.ones_like(self.pheromone)
+                    self.smoothing_cnt = 0
+
         self.pheromone[self.pheromone < 1e-10] = 1e-10
-    
+
     @torch.no_grad()
     def gen_path_costs(self, paths):
         u = paths.permute(1, 0) # shape: (n_ants, max_seq_len)
@@ -341,163 +376,41 @@ class ACO():
     @torch.no_grad()
     def positions_cpu(self):
         return self.positions.cpu().numpy() if self.positions is not None else None
-    
-    # ======== code for adaptive elitist AS ========
-    # These code are unrelated to DeepACO, and are kept for comparisons.
-    def insertion_single(self, route, index):
-        # route starts from 0, terminates with 0
-        insertion_cost = (((self.distances[p1, index]+self.distances[index,p2]-self.distances[p1, p2]).item(), i) 
-                          for i,(p1,p2) in enumerate(zip(route,route[1:])))
-        min_deltacost, min_index = min(insertion_cost)
-        return min_index, min_deltacost
-    
-    def insertion(self, node_indexes, shuffle = False):
-        route = [node_indexes[0].item()]*2
-        cost = 0
-        if shuffle:
-            perm = torch.randperm(len(node_indexes)-1) + 1
-            nodes = node_indexes[perm]
-        else:
-            nodes = node_indexes[1:]
-        for i in nodes:
-            bestpos, deltacost = self.insertion_single(route, i)
-            route.insert(bestpos + 1, i.item())
-            cost += deltacost
-        return route, cost
 
+    @cached_property
+    @torch.no_grad()
+    def heuristic_dist(self):
+        heu = self.heuristic.detach().cpu().numpy()  # type: ignore
+        return (1 / (heu/heu.max(-1, keepdims=True) + 1e-5))
 
     @torch.no_grad()
-    def N1_neighbourhood(self, subroutes, demands, count = 5):
-        # N1 neighbourhood: Pick a random node and insert it in other subroutes.
-        best_insertion = (None, 0.0)
-        for _ in range(count):
-            subroute_index = random.randint(0, len(subroutes) - 1)
-            route = subroutes[subroute_index]
-            node_index = random.randint(1, len(route) - 2) # exclude depots
-            pred, node, next = route[node_index - 1: node_index + 2]
-            demand = self.demand[node]
-            avaliable = demands + demand <= self.capacity
-            avaliable[subroute_index] = False
-            if not avaliable.any(): # no avaliable subroute
-                continue
-            cost = self.distances[pred, next] - self.distances[pred, node] - self.distances[node, next]
-            for i, r in itertools.compress(enumerate(subroutes), avaliable):
-                loc, insertion_cost = self.insertion_single(r, node)
-                insertion_cost += cost
-                if insertion_cost < best_insertion[1]:
-                    best_insertion = ((subroute_index, node_index, i, loc + 1), insertion_cost)
+    def multiple_swap_star(self, paths, indexes=None, inference=False):
+        subroutes_all = []
+        for i in range(paths.size(1)) if indexes is None else indexes:
+            subroutes = get_subroutes(paths[:, i])
+            subroutes_all.append((i, subroutes))
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            for i, p in subroutes_all:
+                count = 10000 if inference else self.problem_size // 10
+                if self.local_search_type == "swapstar":
+                    future = executor.submit(
+                        swapstar, self.demand_cpu, self.distances_cpu, self.positions_cpu, p, count=count
+                    )
+                elif self.local_search_type == "nls":
+                    future = executor.submit(
+                        neural_swapstar,
+                        self.demand_cpu,
+                        self.distances_cpu,
+                        self.heuristic_dist,
+                        self.positions_cpu,
+                        p,
+                        limit=count
+                    )
+                futures.append((i, future))
 
-        if best_insertion[0] is not None: # perform insertion
-            sri, sni, tri, tni = best_insertion[0]
-            subroutes = subroutes[:]
-            source_route, target_route = subroutes[sri], subroutes[tri]
-            node = subroutes[sri][sni]
-            subroutes[tri] = torch.cat([target_route[:tni], node.unsqueeze(0), target_route[tni:]])
-            if len(subroutes[sri])==3:
-                del subroutes[sri]
-            else:
-                subroutes[sri] = torch.cat([source_route[:sni], source_route[sni + 1:]])
-            return subroutes, best_insertion[1]
-        else:
-            return best_insertion
-    
-    @torch.no_grad()
-    def N2_neighbourhood(self, subroutes, demands, count = 5):
-        # N2 neighbourhood: Randomly swap 2 nodes and insert them in the best position.
-        best_insertion = (None, 0.0)
-        for _ in range(count):
-            sr1_index, sr2_index = np.random.choice(len(subroutes), size=2, replace=False)
-            sr1, sr2 = subroutes[sr1_index], subroutes[sr2_index]
-            node1_index = random.randint(1, len(sr1) - 2)
-            pred1, node1, next1 = sr1[node1_index - 1:node1_index + 2]
-            demand1 = self.demand[node1]
-            # avaliable nodes to swap
-            avaliable = torch.bitwise_and(
-                demands[sr2_index] + demand1 - self.demand[sr2] <= self.capacity,
-                demands[sr1_index] - demand1 + self.demand[sr2] <= self.capacity,
-            )
-            avaliable[0] = avaliable[-1] = False
-            if not avaliable.any():
-                continue
-            # remove node1 from sr1
-            cost = self.distances[pred1, next1] - self.distances[pred1, node1] - self.distances[node1, next1]
-            sr1_mod = torch.concat([sr1[:node1_index], sr1[node1_index + 1:]])
-            # choose a node from sr2
-            avaliable_index = torch.arange(len(sr2))[avaliable]
-            node2_index = np.random.choice(avaliable_index)
-            pred2, node2, next2 = sr2[node2_index - 1: node2_index + 2]
-            # remove node2 from sr2
-            cost += self.distances[pred2, next2] - self.distances[pred2, node2] - self.distances[node2, next2]
-            sr2_mod = torch.concat([sr2[:node2_index], sr2[node2_index + 1:]])
-            # insert node1 into sr2_mod
-            loc1, inscost1 = self.insertion_single(sr2_mod, node1)
-            cost += inscost1
-            sr2_mod = torch.concat([sr2_mod[:loc1 + 1], node1.unsqueeze(0), sr2_mod[loc1 + 1:]])
-            # insert node2 into sr1_mod
-            loc2, inscost2 = self.insertion_single(sr1_mod, node2)
-            cost += inscost2
-            sr1_mod = torch.concat([sr1_mod[:loc2 + 1], node2.unsqueeze(0), sr1_mod[loc2 + 1:]])
-            if cost < best_insertion[1]:
-                best_insertion = ((sr1_index, sr1_mod, sr2_index, sr2_mod), cost)
-
-        if best_insertion[0] is not None: # perform insertion
-            sr1_index, sr1, sr2_index, sr2 = best_insertion[0]
-            subroutes = subroutes[:]
-            subroutes[sr1_index] = sr1
-            subroutes[sr2_index] = sr2
-            return subroutes, best_insertion[1]
-        else:
-            return best_insertion
-
-    @torch.no_grad()
-    def improvement_phase(self, paths, costs, topk = 5):
-        # local search
-        if topk <= 0 or topk >= self.n_ants:
-            target_indexes = range(paths.size(1))
-        else:
-            target_indexes = costs.topk(5, largest=False).indices
-
-        for i in target_indexes:
-            subroutes = get_subroutes(paths[:, i], end_with_zero=False)
-            # ILS (not implemented)
-            pass
-            # insertion
-            new_subroutes = []
-            new_cost=0
-            for r in subroutes:
-                new_subroute, c = self.insertion(r)
-                new_cost += c
-                new_subroutes.append(new_subroute)
-            if new_cost < costs[i]:
-                paths[:, i] = merge_subroutes(new_subroutes, paths.size(0), self.device)
-                costs[i] = new_cost
-    
-    @torch.no_grad()
-    def intensification_phase(self, paths, costs, best_idx):
-        ogroute, ogcost = self.shortest_path, self.lowest_cost
-        subroutes = get_subroutes(ogroute, end_with_zero=True)
-        demands = torch.tensor([self.demand[r].sum() for r in subroutes], device=self.device)
-        # print(*subroutes, sep='\n')
-        best_neighbour = (None, 0.0)
-        for func in [self.N1_neighbourhood, self.N2_neighbourhood]:
-            route, cost = func(subroutes, demands)
-            if cost < best_neighbour[1]:
-                best_neighbour = (route, cost)
-        if best_neighbour[0] is not None:
-            self.shortest_path = merge_subroutes(
-                best_neighbour[0], self.shortest_path.size(0), self.device  # type: ignore
-            )
-            self.lowest_cost = ogcost + best_neighbour[1]
-            paths[:, best_idx] = self.shortest_path
-            costs[best_idx] = self.lowest_cost
-
-    @torch.no_grad()
-    def diversification_phase(self):
-        # reinitialize pheromone trails
-        self.pheromone = self.pheromone * (self.decay * 0.5) + 0.01
-        for path, cost in self.elite_pool:
-            self.pheromone[path[:-1], torch.roll(path, shifts=-1)[:-1]] += 1.0 / cost
-
+            for i, future in futures:
+                paths[:, i] = merge_subroutes(future.result(), paths.size(0), self.device)
 
 def neural_swapstar(demand, distances, heu_dist, positions, p, disturb=5, limit=10000):
     p0 = p

@@ -75,22 +75,23 @@ def train_instance(
         aco = ACO(
             distances=distances.to(DEVICE),
             demand=demands.to(DEVICE),
+            positions=positions,
             n_ants=n_ants,
             heuristic=heu_mat.to(DEVICE),
             device=DEVICE,
-            swapstar=True,
-            positions=positions
+            local_search_type="nls",
         )
-        
+
+        costs, log_probs, paths = aco.sample(invtemp=invtemp)
+        advantage = (costs - (costs.mean() if shared_energy_norm else 0.0))
+
         if guided_exploration:
-            costs_nls, log_probs, paths_nls, costs_raw, paths = aco.sample_nls(invtemp)
-            advantage_raw = (costs_raw - (costs_raw.mean() if shared_energy_norm else 0.0))
+            paths_nls = aco.local_search(paths, inference=False)
+            costs_nls = aco.gen_path_costs(paths_nls)
             advantage_nls = (costs_nls - (costs_nls.mean() if shared_energy_norm else 0.0))
-            weighted_advantage = cost_w * advantage_nls + (1 - cost_w) * advantage_raw
+            weighted_advantage = cost_w * advantage_nls + (1 - cost_w) * advantage
         else:
-            costs_raw, log_probs, paths = aco.sample(invtemp)
-            advantage_raw = (costs_raw - (costs_raw.mean() if shared_energy_norm else 0.0))
-            weighted_advantage = advantage_raw
+            weighted_advantage = advantage
 
         ##################################################
         # Loss from paths before local search
@@ -124,8 +125,8 @@ def train_instance(
         ##################################################
         # wandb
         if USE_WANDB:
-            _train_mean_cost += costs_raw.mean().item()
-            _train_min_cost += costs_raw.min().item()
+            _train_mean_cost += costs.mean().item()
+            _train_min_cost += costs.min().item()
 
             normed_heumat = heu_mat / heu_mat.sum(dim=1, keepdim=True)
             entropy = -(normed_heumat * torch.log(normed_heumat)).sum(dim=1).mean()
@@ -178,18 +179,18 @@ def infer_instance(model, pyg_data, demands, distances, positions, n_ants):
     aco = ACO(
         distances=distances,
         demand=demands,
+        positions=positions,
         n_ants=n_ants,
         heuristic=heu_mat,
         device=DEVICE,
-        swapstar=True,
-        positions=positions,
+        local_search_type="nls",
     )
 
     costs, _, _ = aco.sample()
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-    best_aco_1, diversity_1 = aco.run(n_iterations=1)
-    best_aco_T, diversity_T = aco.run(n_iterations=T - 1)
+    best_aco_1, diversity_1, _ = aco.run(n_iterations=1)
+    best_aco_T, diversity_T, _ = aco.run(n_iterations=T - 1)
     return np.array([baseline, best_sample_cost, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 
@@ -363,10 +364,10 @@ if __name__ == "__main__":
     parser.add_argument("--cost_w_min", type=float, default=None, help='Cost weight min for GFACS')
     parser.add_argument("--cost_w_max", type=float, default=1.0, help='Cost weight max for GFACS')
     parser.add_argument("--cost_w_flat_epochs", type=int, default=5, help='Cost weight flat epochs for GFACS')
-    ### Seed
-    parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### Dataset
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
+    ### Seed
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
 
     args = parser.parse_args()
 
@@ -374,10 +375,24 @@ if __name__ == "__main__":
         args.k_sparse = args.nodes // 5
 
     if args.beta_min is None:
-        beta_min_map = {100: 200, 200: 500, 400: 500, 500: 500, 1000: 2000 if args.pretrained is None else 500}
+        beta_min_map = {
+            100: 200,
+            200: 500,
+            400: 500,
+            500: 500,
+            1000: 2000 if args.pretrained is not None else 500,
+            2000: 2000 if args.pretrained is not None else 500,
+        }
         args.beta_min = beta_min_map[args.nodes]
     if args.beta_max is None:
-        beta_max_map = {100: 1000, 200: 2000, 400: 2000, 500: 2000, 1000: 2000}
+        beta_max_map = {
+            100: 1000,
+            200: 2000,
+            400: 2000,
+            500: 2000,
+            1000: 2000,
+            2000: 3000,
+        }
         args.beta_max = beta_max_map[args.nodes]
 
     if args.cost_w_min is None:

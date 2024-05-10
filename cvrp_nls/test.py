@@ -38,7 +38,7 @@ def validate_route(distance: torch.Tensor, demands: torch.Tensor, routes: List[t
 
 
 @torch.no_grad()
-def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco_diff):
+def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, k_sparse):
     if model is not None:
         model.eval()
         heu_vec = model(pyg_data)
@@ -47,43 +47,49 @@ def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco
         heu_mat = None
 
     aco = ACO(
+        distances=distances.cpu(),
+        demand=demands.cpu(),
+        positions=positions.cpu(),
         n_ants=n_ants,
         heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
-        demand=demands.cpu(),
-        distances=distances.cpu(),
-        device='cpu',
-        swapstar=True,
-        positions=positions.cpu(),
+        k_sparse=k_sparse,
+        elitist=ACOALG == "ELITIST",
+        maxmin=ACOALG == "MAXMIN",
+        rank_based=ACOALG == "RANK",
+        device="cpu",
+        local_search_type="nls",
     )
 
     results = torch.zeros(size=(len(t_aco_diff),))
     diversities = torch.zeros(size=(len(t_aco_diff),))
+    elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i] = aco.run(t)
+        results[i], diversities[i], t = aco.run(t)
         path = get_subroutes(aco.shortest_path)
         valid, length = validate_route(distances, demands, path)
         assert (length - results[i].item()) < 1e-4  # FIXME: remove this line
         if valid is False:
            print("invalid solution.")
-    return results, diversities
+        elapsed_time += t
+    return results, diversities, elapsed_time
 
 
 @torch.no_grad()
-def test(dataset, model, n_ants, t_aco):
+def test(dataset, model, n_ants, t_aco, k_sparse):
     _t_aco = [0] + t_aco
     t_aco_diff = [_t_aco[i + 1] - _t_aco[i] for i in range(len(_t_aco) - 1)]
 
     sum_results = torch.zeros(size=(len(t_aco_diff),))
     sum_diversities = torch.zeros(size=(len(t_aco_diff),))
-    start = time.time()
+    sum_times = 0
     for pyg_data, demands, distances, positions in tqdm(dataset):
-        results, diversities = infer_instance(
-            model, pyg_data, demands, distances, positions, n_ants, t_aco_diff
+        results, diversities, elapsed_time = infer_instance(
+            model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, k_sparse
         )
         sum_results += results
         sum_diversities += diversities
-    end = time.time()
-    return sum_results / len(dataset), sum_diversities / len(dataset), end - start
+        sum_times += elapsed_time
+    return sum_results / len(dataset), sum_diversities / len(dataset), sum_times / len(dataset)
 
 
 def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_exploration=False, seed=0):
@@ -103,8 +109,8 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
         net.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
     else:
         net = None
-    avg_cost, avg_diversity, duration = test(test_list, net, n_ants, t_aco)
-    print('total duration: ', duration)
+    avg_cost, avg_diversity, duration = test(test_list, net, n_ants, t_aco, k_sparse)
+    print('average inference time: ', duration)
     for i, t in enumerate(t_aco):
         print(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}")
 
@@ -113,7 +119,7 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
     dirname = os.path.dirname(ckpt_path) if ckpt_path is not None else f'../pretrained/cvrp_nls/{args.nodes}/no_model'
     os.makedirs(dirname, exist_ok=True)
 
-    result_filename = f"test_result_ckpt{filename}-cvrp{n_nodes}-ninst{size}-nants{n_ants}-niter{n_iter}-seed{seed}"
+    result_filename = f"test_result_ckpt{filename}-cvrp{n_nodes}-ninst{size}-{ACOALG}-nants{n_ants}-niter{n_iter}-seed{seed}"
     result_file = os.path.join(dirname, result_filename + ".txt")
     with open(result_file, "w") as f:
         f.write(f"problem scale: {n_nodes}\n")
@@ -122,7 +128,7 @@ def main(ckpt_path, n_nodes, k_sparse, size=None, n_ants=100, n_iter=10, guided_
         f.write(f"device: {'cpu' if DEVICE == 'cpu' else DEVICE+'+cpu'}\n")
         f.write(f"n_ants: {n_ants}\n")
         f.write(f"seed: {seed}\n")
-        f.write(f"total duration: {duration}\n")
+        f.write(f"average inference time: {duration}\n")
         for i, t in enumerate(t_aco):
             f.write(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}\n")
 
@@ -148,10 +154,12 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--size", type=int, default=None, help="Number of instances to test")
     ### GFACS
     parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
-    ### Seed
-    parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### Dataset
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
+    ### ACO
+    parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
+    ### Seed
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
 
     args = parser.parse_args()
 
@@ -160,6 +168,7 @@ if __name__ == "__main__":
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
     TAM = args.tam
+    ACOALG = args.aco
 
     # seed everything
     torch.manual_seed(args.seed)

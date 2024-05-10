@@ -37,7 +37,7 @@ def validate_route(int_distances: np.ndarray, demands: torch.Tensor, routes: Lis
 
 
 @torch.no_grad()
-def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, int_distances):
+def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, k_sparse_factor, int_distances):
     if model is not None:
         model.eval()
         heu_vec = model(pyg_data)
@@ -45,39 +45,48 @@ def infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco
     else:
         heu_mat = None
 
+    k_sparse = positions.shape[0] // k_sparse_factor
     aco = ACO(
+        distances=distances.cpu(),
+        demand=demands.cpu(),
+        positions=positions.cpu(),
         n_ants=n_ants,
         heuristic=heu_mat.cpu() if heu_mat is not None else heu_mat,
-        demand=demands.cpu(),
-        distances=distances.cpu(),
+        k_sparse=k_sparse,
+        elitist=ACOALG == "ELITIST",
+        maxmin=ACOALG == "MAXMIN",
+        rank_based=ACOALG == "RANK",
         device='cpu',
-        swapstar=True,
-        positions=positions.cpu(),
+        local_search_type="nls",
     )
 
     results = torch.zeros(size=(len(t_aco_diff),), dtype=torch.int64)
+    elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        _, _ = aco.run(t)
+        _, _, t = aco.run(t)
         path = get_subroutes(aco.shortest_path)
         valid, length = validate_route(int_distances, demands, path)  # use int_distances here
         if valid is False:
            print("invalid solution.")
         results[i] = length
-    return results
+        elapsed_time += t
+    return results, elapsed_time
 
 
 @torch.no_grad()
-def test(dataset, model, n_ants, t_aco, int_dist_list):
+def test(dataset, model, n_ants, t_aco, k_sparse_factor, int_dist_list):
     _t_aco = [0] + t_aco
     t_aco_diff = [_t_aco[i + 1] - _t_aco[i] for i in range(len(_t_aco) - 1)]
 
     results_list = []
-    start = time.time()
+    times = []
     for (pyg_data, demands, distances, positions), int_distances in tqdm(zip(dataset, int_dist_list)):
-        results = infer_instance(model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, int_distances)
+        results, elapsed_time = infer_instance(
+            model, pyg_data, demands, distances, positions, n_ants, t_aco_diff, k_sparse_factor, int_distances
+        )
         results_list.append(results)
-    end = time.time()
-    return results_list, end - start
+        times.append(elapsed_time)
+    return results_list, times
 
 
 def main(ckpt_path, n_nodes, k_sparse_factor, n_ants=100, n_iter=10, guided_exploration=False, seed=0, dataset_name="X"):
@@ -96,12 +105,13 @@ def main(ckpt_path, n_nodes, k_sparse_factor, n_ants=100, n_iter=10, guided_expl
         net.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
     else:
         net = None
-    results_list, duration = test(test_list, net, n_ants, t_aco, int_dist_list)
-    results_df = pd.DataFrame(index=name_list, columns=["Length"])
-    for name, results in zip(name_list, results_list):
-        results_df.loc[name, :] = results[-1].item()
+    results_list, times = test(test_list, net, n_ants, t_aco, k_sparse_factor, int_dist_list)
+    results_df = pd.DataFrame(index=name_list, columns=["Length", "Time"])
+    for name, results, time in zip(name_list, results_list, times):
+        results_df.loc[name, "Length"] = results[-1].item()
+        results_df.loc[name, "Time"] = time
 
-    print('total duration: ', duration)
+    print('total duration: ', sum(times))
 
     # Save result in directory that contains model_file
     filename = os.path.splitext(os.path.basename(ckpt_path))[0] if ckpt_path is not None else 'none'
@@ -125,13 +135,17 @@ if __name__ == "__main__":
                         help="The device to train NNs")
     ### GFACS
     parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
-    ### Seed
-    parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### Dataset
     parser.add_argument("--dataset", type=str, default="X", help="Dataset name")
+    ### ACO
+    parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
+    ### Seed
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+
     args = parser.parse_args()
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
+    ACOALG = args.aco
 
     # seed everything
     torch.manual_seed(args.seed)

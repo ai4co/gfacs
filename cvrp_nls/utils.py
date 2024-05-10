@@ -178,18 +178,24 @@ if __name__ == '__main__':
         torch.save(testDataset, f'../data/cvrp/testDataset-tam-{n}.pt')
 
     # main Dataset
-    for scale in [200, 500, 1000]:
-        with open(f"../data/cvrp/vrp{scale}_128.pkl", "rb") as f:
-            dataset = pickle.load(f)
-
+    for scale in [200, 500, 1000, 2000]:
         inst_list = []
-        for instance in dataset:
-            depot_position, positions, demands, capacity = instance
+        try:
+            with open(f"../data/cvrp/vrp{scale}_128.pkl", "rb") as f:
+                dataset = pickle.load(f)
 
-            demands_torch = torch.tensor([0] + [d / capacity for d in demands], dtype=torch.float64)
-            positions_torch = torch.tensor([depot_position] + positions, dtype=torch.float64)
-            distmat_torch = gen_distance_matrix(positions_torch)
-            inst_list.append(torch.vstack([demands_torch, positions_torch.T, distmat_torch]))
+            for instance in dataset:
+                depot_position, positions, demands, capacity = instance
 
-            test_dataset = torch.stack(inst_list)
-            torch.save(test_dataset, f"../data/cvrp/testDataset-{scale}.pt")
+                demands_torch = torch.tensor([0] + [d / capacity for d in demands], dtype=torch.float64)
+                positions_torch = torch.tensor([depot_position] + positions, dtype=torch.float64)
+                distmat_torch = gen_distance_matrix(positions_torch)
+                inst_list.append(torch.vstack([demands_torch, positions_torch.T, distmat_torch]))
+        except FileNotFoundError:
+            torch.manual_seed(123456)
+            for i in range(16):
+                demands_torch, distmat_torch, positions_torch = gen_instance(scale, 'cpu')
+                inst_list.append(torch.vstack([demands_torch, positions_torch.T, distmat_torch]))
+
+        test_dataset = torch.stack(inst_list)
+        torch.save(test_dataset, f"../data/cvrp/testDataset-{scale}.pt")
