@@ -160,7 +160,6 @@ if __name__ == "__main__":
     parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
-
     args = parser.parse_args()
 
     if args.k_sparse is None:

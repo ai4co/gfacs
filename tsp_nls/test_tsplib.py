@@ -35,7 +35,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff):
     results = torch.zeros(size=(len(t_aco_diff),))
     elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        cost, _, t = aco.run(t, inference=True, start_node=START_NODE)
+        cost, _, t = aco.run(t, start_node=START_NODE)
         results[i] = cost
         elapsed_time += t
     return results, aco.shortest_path, elapsed_time

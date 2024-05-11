@@ -57,15 +57,16 @@ def train_instance(
 
         aco = ACO(distances, n_ants, heuristic=heu_mat, device=DEVICE, local_search_type='nls')
 
-        costs_raw, log_probs, paths_raw = aco.sample(invtemp=invtemp, start_node=START_NODE)
-        advantage_raw = (costs_raw - (costs_raw.mean() if shared_energy_norm else 0.0))
+        costs, log_probs, paths = aco.sample(invtemp=invtemp, start_node=START_NODE)
+        advantage = (costs - (costs.mean() if shared_energy_norm else 0.0))
 
         if guided_exploration:
-            costs_nls, paths_nls = aco.sample_nls(paths_raw)
+            paths_nls = aco.local_search(paths, inference=False)
+            costs_nls = aco.gen_path_costs(paths_nls)
             advantage_nls = (costs_nls - (costs_nls.mean() if shared_energy_norm else 0.0))
-            weighted_advantage = cost_w * advantage_nls + (1 - cost_w) * advantage_raw
+            weighted_advantage = cost_w * advantage_nls + (1 - cost_w) * advantage
         else:
-            weighted_advantage = advantage_raw
+            weighted_advantage = advantage
 
         ##################################################
         # Loss from paths before local search
@@ -94,8 +95,8 @@ def train_instance(
         ##################################################
         # wandb
         if USE_WANDB:
-            _train_mean_cost += costs_raw.mean().item()
-            _train_min_cost += costs_raw.min().item()
+            _train_mean_cost += costs.mean().item()
+            _train_min_cost += costs.min().item()
 
             normed_heumat = heu_mat / heu_mat.sum(dim=1, keepdim=True)
             entropy = -(normed_heumat * torch.log(normed_heumat)).sum(dim=1).mean()
@@ -155,8 +156,8 @@ def infer_instance(model, pyg_data, distances, n_ants):
     costs = aco.sample(inference=True, start_node=START_NODE)[0]
     baseline = costs.mean().item()
     best_sample_cost = costs.min().item()
-    best_aco_1, diversity_1, _ = aco.run(n_iterations=1, inference=True, start_node=START_NODE)
-    best_aco_T, diversity_T, _ = aco.run(n_iterations=T - 1, inference=True, start_node=START_NODE)
+    best_aco_1, diversity_1, _ = aco.run(n_iterations=1, start_node=START_NODE)
+    best_aco_T, diversity_T, _ = aco.run(n_iterations=T - 1, start_node=START_NODE)
     return np.array([baseline, best_sample_cost, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 

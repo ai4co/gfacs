@@ -39,7 +39,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse):
     diversities = np.zeros(shape=(len(t_aco_diff),))
     elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i], t = aco.run(t, inference=True, start_node=START_NODE)
+        results[i], diversities[i], t = aco.run(t, start_node=START_NODE)
         elapsed_time += t
     return results, diversities, elapsed_time
 

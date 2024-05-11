@@ -79,7 +79,7 @@ if __name__ == "__main__":
             duration_matrix=np.zeros_like(distance),
         )
         model = Model.from_data(data)
-        result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed)
+        result = model.solve(stop=MaxIterations(opt.maxiter), seed=opt.seed, display=False)
         return result
 
     results = []

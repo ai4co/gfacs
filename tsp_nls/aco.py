@@ -18,6 +18,7 @@ class ACO():
         distances: torch.Tensor,
         n_ants=20,
         heuristic: torch.Tensor | None = None,
+        k_sparse=None,
         pheromone: torch.Tensor | None = None,
         decay=0.9,
         alpha=1,
@@ -31,9 +32,8 @@ class ACO():
         smoothing_thres=5,
         smoothing_delta=0.5,
         shift_cost=True,
-        k_sparse=None,
-        device='cpu',
         local_search_type: str | None = 'nls',
+        device='cpu',
     ):
 
         self.problem_size = len(distances)
@@ -45,7 +45,7 @@ class ACO():
         self.elitist = elitist or maxmin  # maxmin uses elitist
         self.maxmin = maxmin
         self.rank_based = rank_based
-        self.n_elites = n_elites or (n_ants // 10)  # only for rank-based
+        self.n_elites = n_elites or n_ants // 10  # only for rank-based
 
         # Smoothing
         self.smoothing = smoothing
@@ -56,9 +56,9 @@ class ACO():
         self.device = device
 
         if pheromone is None:
-            self.pheromone = torch.ones_like(self.distances)  # * (1 / self.problem_size)
-            if maxmin:
-                self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
+            self.pheromone = torch.ones_like(self.distances)
+            # if maxmin:
+            #     self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
         else:
             self.pheromone = pheromone.to(device)
 
@@ -115,20 +115,17 @@ class ACO():
         return paths
 
     @torch.no_grad()
-    def run(self, n_iterations, inference=True, start_node=None):
+    def run(self, n_iterations, start_node=None):
         assert n_iterations > 0
 
         start = time.time()
         for _ in range(n_iterations):
-            if inference:
-                probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
-                paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
-                paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
-            else:
-                paths = self.gen_path(invtemp=1.0, require_prob=False, start_node=start_node)
+            probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
+            paths = numba_sample(probmat.cpu().numpy(), self.n_ants, start_node=start_node)
+            paths = torch.from_numpy(paths.T.astype(np.int64)).to(self.device)
             _paths = paths.clone()  # type: ignore
 
-            paths = self.local_search(paths, inference)
+            paths = self.local_search(paths, inference=True)
             costs = self.gen_path_costs(paths)
 
             best_cost, best_idx = costs.min(dim=0)
@@ -202,8 +199,9 @@ class ACO():
                 self.pheromone[torch.roll(path, shifts=1), path] += delta
 
         if self.maxmin:
-            _max = _max = 1 / ((1 - self.decay) * self.lowest_cost)
-            _min = _max * (1 - (0.05 ** (1 / self.problem_size))) / (0.5 * self.problem_size - 1)
+            _max = 1 / ((1 - self.decay) * self.lowest_cost)
+            p_dec = 0.05 ** (1 / self.problem_size)
+            _min = _max * (1 - p_dec) / (0.5 * self.problem_size - 1) / p_dec
             self.pheromone = torch.clamp(self.pheromone, min=_min, max=_max)
             # check convergence
             if (self.pheromone[self.shortest_path, torch.roll(self.shortest_path, shifts=1)] >= _max * 0.99).all():  # type: ignore
@@ -216,6 +214,8 @@ class ACO():
                 if self.smoothing_cnt >= self.smoothing_thres:
                     self.pheromone = self.smoothing_delta * self.pheromone + (self.smoothing_delta) * torch.ones_like(self.pheromone)
                     self.smoothing_cnt = 0
+
+        self.pheromone[self.pheromone < 1e-10] = 1e-10
 
     @torch.no_grad()
     def gen_path_costs(self, paths):
@@ -334,20 +334,21 @@ class ACO_NP():
         self, 
         distances: np.ndarray,
         n_ants=20,
+        heuristic: np.ndarray | None = None,
+        k_sparse=None,
+        pheromone: np.ndarray | None = None,
         decay=0.9,
         alpha=1,
         beta=1,
+        # AS variants
         elitist=False,
         maxmin=False,
         rank_based=False,
         n_elites=None,
-        smoothing=True,
+        smoothing=False,
         smoothing_thres=5,
         smoothing_delta=0.5,
         shift_cost=True,
-        pheromone: np.ndarray | None = None,
-        heuristic: np.ndarray | None = None,
-        k_sparse=None,
         local_search_type: str | None = 'nls',
     ):
         self.problem_size = len(distances)
@@ -359,7 +360,7 @@ class ACO_NP():
         self.elitist = elitist or maxmin  # maxmin uses elitist
         self.maxmin = maxmin
         self.rank_based = rank_based
-        self.n_elites = n_elites or (n_ants // 10)
+        self.n_elites = n_elites or n_ants // 10  # only for rank-based
         self.smoothing = smoothing
         self.smoothing_cnt = 0
         self.smoothing_thres = smoothing_thres
@@ -367,8 +368,8 @@ class ACO_NP():
         self.shift_cost = shift_cost
 
         self.pheromone = pheromone or np.ones_like(self.distances)
-        if maxmin:
-            self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
+        # if maxmin:
+        #     self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
         self.heuristic = heuristic if heuristic is not None else self.simple_heuristic(distances, k_sparse)
 
         assert local_search_type in [None, "2opt", "nls"]
@@ -425,8 +426,7 @@ class ACO_NP():
             paths = self.nls(paths, inference)
         return paths
 
-    def run(self, n_iterations, inference=True, start_node=None):
-        assert inference
+    def run(self, n_iterations, start_node=None):
         assert n_iterations > 0
 
         start = time.time()
@@ -436,7 +436,7 @@ class ACO_NP():
             # (n_ants, problem_size)
             _paths = paths.copy()
 
-            paths = self.local_search(paths, inference)
+            paths = self.local_search(paths, inference=True)
             costs = self.gen_path_costs(paths)
 
             best_idx = costs.argmin()
@@ -515,8 +515,9 @@ class ACO_NP():
             np.add.at(phe2, (edge1, edge2), deltas.repeat(2 * self.problem_size))
 
         if self.maxmin:
-            _max = _max = 1 / ((1 - self.decay) * self.lowest_cost)
-            _min = _max * (1 - (0.05 ** (1 / self.problem_size))) / (0.5 * self.problem_size - 1)
+            _max = 1 / ((1 - self.decay) * self.lowest_cost)
+            p_dec = 0.05 ** (1 / self.problem_size)
+            _min = _max * (1 - p_dec) / (0.5 * self.problem_size - 1) / p_dec
             self.pheromone = self.pheromone.clip(min=_min, max=_max)
             # check convergence
             if (self.pheromone[self.shortest_path, np.roll(self.shortest_path, shift=1)] >= _max * 0.99).all():  # type: ignore
@@ -529,6 +530,8 @@ class ACO_NP():
                 if self.smoothing_cnt >= self.smoothing_thres:
                     self.pheromone = self.smoothing_delta * self.pheromone + (self.smoothing_delta) * np.ones_like(self.pheromone)
                     self.smoothing_cnt = 0
+
+        self.pheromone[self.pheromone < 1e-10] = 1e-10
 
     def gen_path_costs(self, paths):
         '''

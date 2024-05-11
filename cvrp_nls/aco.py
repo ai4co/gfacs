@@ -213,11 +213,19 @@ class ACO():
 
         elif self.rank_based:
             # Rank-based pheromone update
+            assert self.shortest_path is not None
             elite_indices = torch.argsort(deltas, descending=True)[:self.n_elites]
             elite_paths = paths[:, elite_indices]
             elite_deltas = deltas[elite_indices]
             if self.lowest_cost < costs.min():
-                elite_paths = torch.cat([self.shortest_path.unsqueeze(1), elite_paths[:, :-1]], dim=1)  # type: ignore
+                # Zero-padding to the shorter path
+                diff_length = elite_paths.size(0) - self.shortest_path.size(0)
+                if diff_length > 0:
+                    self.shortest_path = torch.nn.functional.pad(self.shortest_path, (0, diff_length))
+                elif diff_length < 0:
+                    elite_paths = torch.nn.functional.pad(elite_paths, (0, 0, 0, -diff_length))
+
+                elite_paths = torch.cat([self.shortest_path.unsqueeze(1), elite_paths[:, :-1]], dim=1)
                 elite_deltas = torch.cat([torch.tensor([delta_gb], device=self.device), elite_deltas[:-1]])
 
             rank_denom = (self.n_elites * (self.n_elites + 1)) / 2
@@ -235,7 +243,7 @@ class ACO():
                 self.pheromone[torch.roll(path, shifts=1)[:-1], path[:-1]] += delta
 
         if self.maxmin:
-            _max = _max = 1 / ((1 - self.decay) * self.lowest_cost)
+            _max = 1 / ((1 - self.decay) * self.lowest_cost)
             p_dec = 0.05 ** (1 / self.problem_size)
             _min = _max * (1 - p_dec) / (0.5 * self.problem_size - 1) / p_dec
             self.pheromone = torch.clamp(self.pheromone, min=_min, max=_max)
