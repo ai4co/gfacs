@@ -35,7 +35,6 @@ class ACO():
         local_search_type: str | None = 'nls',
         device='cpu',
     ):
-
         self.problem_size = len(distances)
         self.distances = distances.to(device)
         self.n_ants = n_ants
@@ -158,17 +157,17 @@ class ACO():
             costs: torch tensor with shape (n_ants,)
         '''
         deltas = 1.0 / costs
+        delta_gb = 1.0 / self.lowest_cost
         if self.shift_cost:
             total_delta_phe = self.pheromone.sum() * (1 - self.decay)
             n_ants_for_update = self.n_ants if not (self.elitist or self.rank_based) else 1
             shifter = - deltas.mean() + total_delta_phe / (2 * n_ants_for_update * self.problem_size)
 
-            deltas = deltas + shifter
-            deltas = deltas.clamp(min=1e-10)
-            delta_gb = (1.0 / self.lowest_cost) + shifter
+            deltas = (deltas + shifter).clamp(min=1e-10)
+            delta_gb += shifter
 
         self.pheromone = self.pheromone * self.decay
-            
+
         if self.elitist:
             best_delta, best_idx = deltas.max(dim=0)
             best_tour= paths[:, best_idx]
@@ -468,17 +467,17 @@ class ACO_NP():
             costs: np.ndarray with shape (n_ants,)
         '''
         deltas = 1.0 / costs
+        delta_gb = 1.0 / self.lowest_cost
         if self.shift_cost:
             total_delta_phe = self.pheromone.sum() * (1 - self.decay)
             n_ants_for_update = self.n_ants if not (self.elitist or self.rank_based) else 1
             shifter = - deltas.mean() + total_delta_phe / (2 * n_ants_for_update * self.problem_size)
 
-            deltas = deltas + shifter
-            deltas = deltas.clip(min=1e-10)
-            delta_gb = (1.0 / self.lowest_cost) + shifter
+            deltas = (deltas + shifter).clip(min=1e-10)
+            delta_gb += shifter
 
         self.pheromone = self.pheromone * self.decay
-            
+
         if self.elitist:
             best_idx = deltas.argmax(axis=0)
             best_delta = deltas[best_idx]
@@ -506,13 +505,12 @@ class ACO_NP():
             np.add.at(self.pheromone, (edge1, edge2), elite_deltas.repeat(2 * self.problem_size))
 
         else:
-            phe2 = self.pheromone.copy()
             _u = paths
             _v = np.roll(_u, shift=1, axis=1)
             edges = np.stack([_u.flatten(), _v.flatten()], axis=1)
             edge1 = np.concatenate([edges[:, 0], edges[:, 1]], axis=0)
             edge2 = np.concatenate([edges[:, 1], edges[:, 0]], axis=0)
-            np.add.at(phe2, (edge1, edge2), deltas.repeat(2 * self.problem_size))
+            np.add.at(self.pheromone, (edge1, edge2), deltas.repeat(2 * self.problem_size))
 
         if self.maxmin:
             _max = 1 / ((1 - self.decay) * self.lowest_cost)

@@ -194,14 +194,14 @@ class ACO():
             costs: torch tensor with shape (n_ants,)
         '''
         deltas = 1.0 / costs
+        delta_gb = 1.0 / self.lowest_cost
         if self.shift_cost:
             total_delta_phe = self.pheromone.sum() * (1 - self.decay)
             n_ants_for_update = self.n_ants if not (self.elitist or self.rank_based) else 1
             shifter = - deltas.mean() + total_delta_phe / (2 * n_ants_for_update * (paths.shape[0] - 1))
 
-            deltas = deltas + shifter
-            deltas = deltas.clamp(min=1e-10)
-            delta_gb = (1.0 / self.lowest_cost) + shifter
+            deltas = (deltas + shifter).clamp(min=1e-10)
+            delta_gb += shifter
 
         self.pheromone = self.pheromone * self.decay
 
