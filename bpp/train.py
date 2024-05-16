@@ -68,6 +68,7 @@ def train_instance(
         pyg_data = gen_pyg_data(demands, DEVICE)
 
         heu_vec, logZs = model(pyg_data, return_logZ=True)
+        heu_mat = model.reshape(pyg_data, heu_vec) + EPS
         if guided_exploration:
             logZ, logZ_ls = logZs
         else:
@@ -75,7 +76,7 @@ def train_instance(
         heu_mat = heu_vec.reshape(n_nodes + 1, n_nodes + 1) + EPS
         # heu_mat = (heu_vec / (heu_vec.min() + EPS) + EPS).reshape(n_nodes + 1, n_nodes + 1)
 
-        aco = ACO(demands, n_ants, heuristic=heu_mat, device=DEVICE)
+        aco = ACO(demands, n_ants=n_ants, heuristic=heu_mat, device=DEVICE)
 
         objs, log_probs, sols = aco.sample(invtemp=invtemp, return_sol=True)  # type: ignore
         baseline = objs.mean() if shared_energy_norm else torch.tensor(0.0, device=DEVICE)
@@ -107,7 +108,7 @@ def train_instance(
             baseline_ls = objs_ls.mean() if shared_energy_norm else torch.tensor(0.0, device=DEVICE)
 
             forward_flow_ls = log_probs_ls.sum(0) + logZ_ls.expand(n_ants)  # type: ignore
-            backward_flow_ls = calculate_log_pb_uniform(sols.T) + (objs_ls - baseline_ls).detach() * beta
+            backward_flow_ls = calculate_log_pb_uniform(sols_ls.T) + (objs_ls - baseline_ls).detach() * beta
             tb_loss_ls = torch.pow(forward_flow_ls - backward_flow_ls, 2).mean()
             sum_loss_ls += tb_loss_ls
 
@@ -164,10 +165,9 @@ def infer_instance(model, instance, n_ants):
     n = demands.size(0)
 
     heu_vec = model(pyg_data)
-    heu_mat = heu_vec.reshape(n, n) + EPS
-    # heu_mat = (heu_vec / (heu_vec.min() + EPS) + EPS).reshape(n + 1, n + 1)
+    heu_mat = model.reshape(pyg_data, heu_vec) + EPS
 
-    aco = ACO(demands, n_ants, heuristic=heu_mat, device=DEVICE)
+    aco = ACO(demands, n_ants=n_ants, heuristic=heu_mat, device=DEVICE)
 
     objs, _ = aco.sample()  # type: ignore
     baseline = objs.mean().item()
@@ -194,7 +194,7 @@ def train_epoch(
     beta=5000.0,
     topk=5,
 ):
-    for i in tqdm(range(steps_per_epoch), desc="Train"):
+    for i in tqdm(range(steps_per_epoch), desc="Train", dynamic_ncols=True):
         it = (epoch - 1) * steps_per_epoch + i
         train_instance(
             net, optimizer, batch_size, n_nodes, n_ants, invtemp, guided_exploration, shared_energy_norm, beta, topk, it
@@ -324,7 +324,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_wandb", action="store_true", help="Disable wandb logging")
     parser.add_argument("--run_name", type=str, default="", help="Run name")
     ### invtemp
-    parser.add_argument("--invtemp_min", type=float, default=0.8, help='Inverse temperature min for GFACS')
+    parser.add_argument("--invtemp_min", type=float, default=1.0, help='Inverse temperature min for GFACS')
     parser.add_argument("--invtemp_max", type=float, default=1.0, help='Inverse temperature max for GFACS')
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature glat rpochs for GFACS')
     ### GFACS

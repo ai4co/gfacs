@@ -52,6 +52,8 @@ class ACO():
         self.smoothing_thres = smoothing_thres
         self.smoothing_delta = smoothing_delta
         self.shift_cost = shift_cost
+        assert local_search_type in [None, "2opt", "nls"]
+        self.local_search_type = local_search_type
         self.device = device
 
         if pheromone is None:
@@ -66,9 +68,6 @@ class ACO():
             self.heuristic = self.simple_heuristic(distances, k_sparse)
         else:
             self.heuristic = heuristic.to(device)
-
-        assert local_search_type in [None, "2opt", "nls"]
-        self.local_search_type = local_search_type
 
         self.shortest_path = None
         self.lowest_cost = float('inf')
@@ -100,11 +99,6 @@ class ACO():
             paths, log_probs = self.gen_path(invtemp=invtemp, require_prob=True, start_node=start_node)
         costs = self.gen_path_costs(paths)
         return costs, log_probs, paths
-
-    def sample_nls(self, paths):
-        paths = self.local_search(paths)
-        costs = self.gen_path_costs(paths)
-        return costs, paths
 
     def local_search(self, paths, inference=False):
         if self.local_search_type == "2opt":
@@ -250,6 +244,7 @@ class ACO():
             paths: torch tensor with shape (problem_size, n_ants), paths[:, i] is the constructed tour of the ith ant
             log_probs: torch tensor with shape (problem_size, n_ants), log_probs[i, j] is the log_prob of the ith action of the jth ant
         '''
+        prob_mat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
         if paths is None:
             if start_node is None:
                 start = torch.randint(low=0, high=self.problem_size, size=(self.n_ants,), device=self.device)
@@ -257,17 +252,15 @@ class ACO():
                 start = torch.ones((self.n_ants,), dtype = torch.long, device=self.device) * start_node
         else:
             start = paths[0]
+        paths_list = [start] # paths_list[i] is the ith move (tensor) for all ants
+
+        initial_prob = torch.ones(self.n_ants, device=self.device) * (1 / self.problem_size)
+        log_probs_list = [initial_prob.log()]  # log_probs_list[i] is the ith log_prob (tensor) for all ants' actions
 
         mask = torch.ones(size=(self.n_ants, self.problem_size), device=self.device)
         index = torch.arange(self.n_ants, device=self.device)
-        prob_mat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
-
         mask[index, start] = 0
 
-        paths_list = [] # paths_list[i] is the ith move (tensor) for all ants
-        paths_list.append(start)
-
-        log_probs_list = []  # log_probs_list[i] is the ith log_prob (tensor) for all ants' actions
         prev = start
         for i in range(self.problem_size - 1):
             dist = (prob_mat[prev] ** invtemp) * mask
@@ -365,14 +358,13 @@ class ACO_NP():
         self.smoothing_thres = smoothing_thres
         self.smoothing_delta = smoothing_delta
         self.shift_cost = shift_cost
+        assert local_search_type in [None, "2opt", "nls"]
+        self.local_search_type = local_search_type
 
         self.pheromone = pheromone or np.ones_like(self.distances)
         # if maxmin:
         #     self.pheromone = self.pheromone / ((1 - self.decay) * (self.problem_size ** 0.5))  # arbitrarily (high) value
         self.heuristic = heuristic if heuristic is not None else self.simple_heuristic(distances, k_sparse)
-
-        assert local_search_type in [None, "2opt", "nls"]
-        self.local_search_type = local_search_type
 
         self.shortest_path = None
         self.lowest_cost = float('inf')
@@ -402,20 +394,13 @@ class ACO_NP():
 
         probmat = (self.pheromone ** self.alpha) * (self.heuristic ** self.beta)
         paths = numba_sample(probmat, self.n_ants, invtemp=invtemp, start_node=start_node)
-        paths = paths.T.astype(np.int64)
-
         costs = self.gen_path_costs(paths)
+        paths = paths.T.astype(np.int64)
 
         if K > 1:
             self.n_ants = n_ants
 
         return costs, None, paths
-
-    def sample_nls(self, paths: np.ndarray):
-        # paths: (problem_size, n_ants)
-        paths = self.local_search(paths.T)
-        costs = self.gen_path_costs(paths)
-        return costs, paths
 
     def local_search(self, paths: np.ndarray, inference=False):
         # paths: (n_ants, problem_size)
@@ -534,12 +519,12 @@ class ACO_NP():
     def gen_path_costs(self, paths):
         '''
         Args:
-            paths: numpy ndarray with shape (problem_size, n_ants) or (n_ants, problem_size)
+            paths: numpy ndarray with shape (n_ants, problem_size)
         Returns:
             Lengths of paths: numpy ndarray with shape (n_ants,)
         '''
-        u = paths.T if paths.shape == (self.problem_size, self.n_ants) else paths  # shape: (n_ants, problem_size)
-        v = np.roll(u, shift=1, axis=1)  # shape: (n_ants, problem_size)
+        u = paths
+        v = np.roll(u, shift=1, axis=1)
         # assert (self.distances[u, v] > 0).all()
         return np.sum(self.distances[u, v], axis=1)
 

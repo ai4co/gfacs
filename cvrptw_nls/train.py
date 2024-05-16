@@ -221,7 +221,7 @@ def train_epoch(
     beta=100.0,
     local_search_params=None,
 ):
-    for i in tqdm(range(steps_per_epoch), desc="Train"):
+    for i in tqdm(range(steps_per_epoch), desc="Train", dynamic_ncols=True):
         it = (epoch - 1) * steps_per_epoch + i
         data = generate_traindata(batch_size, n_node, k_sparse)
         train_instance(
@@ -232,7 +232,7 @@ def train_epoch(
 @torch.no_grad()
 def validation(val_list, n_ants, net, epoch, steps_per_epoch, local_search_params=None):
     stats = []
-    for data, demands, distances, positions, windows in tqdm(val_list, desc="Val"):
+    for data, demands, distances, positions, windows in tqdm(val_list, desc="Val", dynamic_ncols=True):
         stats.append(infer_instance(net, data, demands, distances, positions, windows, n_ants, local_search_params))
     avg_stats = [i.item() for i in np.stack(stats).mean(0)]
 

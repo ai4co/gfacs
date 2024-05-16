@@ -33,6 +33,7 @@ def infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse):
         elitist=ACOALG == "ELITIST",
         maxmin=ACOALG == "MAXMIN",
         rank_based=ACOALG == "RANK",
+        shift_cost=SHIFT_COST,
     )
 
     results = np.zeros(shape=(len(t_aco_diff),))
@@ -52,7 +53,7 @@ def test(dataset, model, n_ants, t_aco, k_sparse):
     sum_results = np.zeros(shape=(len(t_aco_diff), ))
     sum_diversities = np.zeros(shape=(len(t_aco_diff), ))
     sum_times = 0
-    for pyg_data, distances in tqdm(dataset):
+    for pyg_data, distances in tqdm(dataset, dynamic_ncols=True):
         results, diversities, elapsed_time = infer_instance(model, pyg_data, distances, n_ants, t_aco_diff, k_sparse)
         sum_results += results
         sum_diversities += diversities
@@ -127,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     ### ACO
     parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
+    parser.add_argument("--disable_shift_cost", action="store_true", help="True for disable shift cost for pheromone update")
     args = parser.parse_args()
 
     if args.k_sparse is None:
@@ -134,6 +136,7 @@ if __name__ == "__main__":
 
     DEVICE = args.device if torch.cuda.is_available() else "cpu"
     ACOALG = args.aco
+    SHIFT_COST = not args.disable_shift_cost
 
     # seed everything
     torch.manual_seed(args.seed)

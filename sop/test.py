@@ -45,7 +45,7 @@ def test(dataset, model, n_ants, t_aco):
     sum_results = torch.zeros(size=(len(t_aco_diff),))
     sum_diversities = torch.zeros(size=(len(t_aco_diff),))
     start = time.time()
-    for instance in tqdm(dataset):
+    for instance in tqdm(dataset, dynamic_ncols=True):
         results, diversities = infer_instance(model, instance, n_ants, t_aco_diff)
         sum_results += results.cpu()
         sum_diversities += diversities

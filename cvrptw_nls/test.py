@@ -83,7 +83,7 @@ def test(dataset, model, n_ants, t_aco, local_search_params):
     sum_results = torch.zeros(size=(len(t_aco_diff),))
     sum_diversities = torch.zeros(size=(len(t_aco_diff),))
     start = time.time()
-    for pyg_data, demands, distances, positions, windows in tqdm(dataset):
+    for pyg_data, demands, distances, positions, windows in tqdm(dataset, dynamic_ncols=True):
         results, diversities = infer_instance(
             model, pyg_data, demands, distances, positions, windows, n_ants, t_aco_diff, local_search_params
         )

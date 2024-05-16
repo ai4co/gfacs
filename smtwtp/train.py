@@ -314,7 +314,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_wandb", action="store_true", help="Disable wandb logging")
     parser.add_argument("--run_name", type=str, default="", help="Run name")
     ### invtemp
-    parser.add_argument("--invtemp_min", type=float, default=0.8, help='Inverse temperature min for GFACS')
+    parser.add_argument("--invtemp_min", type=float, default=1.0, help='Inverse temperature min for GFACS')
     parser.add_argument("--invtemp_max", type=float, default=1.0, help='Inverse temperature max for GFACS')
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature glat rpochs for GFACS')
     ### GFACS

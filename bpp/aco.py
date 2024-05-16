@@ -7,7 +7,7 @@ import torch
 from torch.distributions import Categorical
 
 
-CAPACITY = 150
+CAPACITY = 1
 
 
 @numba.njit()
@@ -35,11 +35,11 @@ def cal_fitness(s: np.ndarray, demand: np.ndarray, n_bins: np.ndarray):
             if s[i, j] != 0: # not dummy node
                 sub_f += demand[s[i, j]]
             else:
-                f += (sub_f / CAPACITY)**2
+                f += sub_f ** 2
                 sub_f = 0
         ret[i] = f / n_bins[i]
     return ret
-            
+
 
 class ACO():
 
@@ -49,6 +49,7 @@ class ACO():
     def __init__(
         self,  # 0: depot
         demand,   # (n, )
+        capacity=CAPACITY,
         n_ants=20, 
         decay=0.9,
         alpha=1,
@@ -57,13 +58,11 @@ class ACO():
         pheromone=None,
         heuristic=None,
         device='cpu',
-        capacity=CAPACITY
     ):
-
         self.problem_size = len(demand)
-        self.capacity = capacity
         self.demand = demand
-        
+        self.capacity = capacity
+
         self.n_ants = n_ants
         self.decay = decay
         self.alpha = alpha
@@ -159,7 +158,7 @@ class ACO():
         used_capacity, capacity_mask = self.update_capacity_mask(actions, used_capacity)
         
         sols_list = [actions]  # sols_list[i] is the ith move (tensor) for all ants
-        
+
         log_probs_list = []  # log_probs_list[i] is the ith log_prob (tensor) for all ants' actions
         
         done = self.check_done(visit_mask, actions)
@@ -223,7 +222,7 @@ class ACO():
         capacity_mask[demand_repeat > remaining_capacity_repeat] = 0
 
         return used_capacity, capacity_mask
-    
+
     def check_done(self, visit_mask, actions):
         return (visit_mask[:, 1:] == 0).all() and (actions == 0).all()
     

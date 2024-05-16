@@ -215,7 +215,7 @@ def train_epoch(
     shared_energy_norm=False,
     beta=100.0,
 ):
-    for i in tqdm(range(steps_per_epoch), desc="Train"):
+    for i in tqdm(range(steps_per_epoch), desc="Train", dynamic_ncols=True):
         it = (epoch - 1) * steps_per_epoch + i
         data = generate_traindata(batch_size, n_node, k_sparse)
         train_instance(net, optimizer, data, n_ants, cost_w, invtemp, guided_exploration, shared_energy_norm, beta, it)
@@ -224,7 +224,7 @@ def train_epoch(
 @torch.no_grad()
 def validation(val_list, n_ants, net, epoch, steps_per_epoch):
     stats = []
-    for data, demands, distances, positions in tqdm(val_list, desc="Val"):
+    for data, demands, distances, positions in tqdm(val_list, desc="Val", dynamic_ncols=True):
         stats.append(infer_instance(net, data, demands, distances, positions, n_ants))
     avg_stats = [i.item() for i in np.stack(stats).mean(0)]
 
@@ -339,11 +339,11 @@ if __name__ == "__main__":
                         help="The device to train NNs")
     parser.add_argument("-p", "--pretrained", type=str, default=None, help="Path to pretrained model")
     parser.add_argument("-a", "--ants", type=int, default=20, help="Number of ants (in ACO algorithm)")
-    parser.add_argument("-va", "--val_ants", type=int, default=100, help="Number of ants for validation")
+    parser.add_argument("-va", "--val_ants", type=int, default=50, help="Number of ants for validation")
     parser.add_argument("-b", "--batch_size", type=int, default=10, help="Batch size")
     parser.add_argument("-s", "--steps", type=int, default=20, help="Steps per epoch")
     parser.add_argument("-e", "--epochs", type=int, default=50, help="Epochs to run")
-    parser.add_argument("-v", "--val_size", type=int, default=5, help="Number of instances for validation")
+    parser.add_argument("-v", "--val_size", type=int, default=10, help="Number of instances for validation")
     parser.add_argument("-o", "--output", type=str, default="../pretrained/cvrp_nls",
                         help="The directory to store checkpoints")
     parser.add_argument("--val_interval", type=int, default=5, help="The interval to validate model")
@@ -351,7 +351,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_wandb", action="store_true", help="Disable wandb logging")
     parser.add_argument("--run_name", type=str, default="", help="Run name")
     ### invtemp
-    parser.add_argument("--invtemp_min", type=float, default=0.8, help='Inverse temperature min for GFACS')
+    parser.add_argument("--invtemp_min", type=float, default=1.0, help='Inverse temperature min for GFACS')
     parser.add_argument("--invtemp_max", type=float, default=1.0, help='Inverse temperature max for GFACS')
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature flat epochs for GFACS')
     ### GFACS
@@ -362,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta_flat_epochs", type=int, default=5, help='Beta flat epochs for GFACS')
     ### Energy Reshaping
     parser.add_argument("--cost_w_min", type=float, default=None, help='Cost weight min for GFACS')
-    parser.add_argument("--cost_w_max", type=float, default=1.0, help='Cost weight max for GFACS')
+    parser.add_argument("--cost_w_max", type=float, default=0.99, help='Cost weight max for GFACS')
     parser.add_argument("--cost_w_flat_epochs", type=int, default=5, help='Cost weight flat epochs for GFACS')
     ### Dataset
     parser.add_argument("--tam", action="store_true", help="Use TAM dataset")
