@@ -175,7 +175,7 @@ def train_epoch(
     steps_per_epoch,
     net,
     optimizer,
-    batch_size = 1,
+    batch_size,
     cost_w=0.95,
     invtemp=1.0,
     guided_exploration=False,

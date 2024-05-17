@@ -45,8 +45,6 @@ class ACO():
         self.maxmin = maxmin
         self.rank_based = rank_based
         self.n_elites = n_elites or n_ants // 10  # only for rank-based
-
-        # Smoothing
         self.smoothing = smoothing
         self.smoothing_cnt = 0
         self.smoothing_thres = smoothing_thres

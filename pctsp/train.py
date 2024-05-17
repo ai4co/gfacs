@@ -19,7 +19,16 @@ T = 5
 
 
 def train_instance(
-    model, optimizer, batch_size, n_nodes, n_ants, invtemp=1.0, guided_exploration=False, beta=10.0, topk=5, it=0
+    model,
+    optimizer,
+    batch_size,
+    n_nodes,
+    n_ants,
+    cost_w=0.5,
+    invtemp=1.0,
+    guided_exploration=False,
+    beta=10.0,
+    it=0,
 ):
     model.train()
     ##################################################
@@ -30,7 +39,7 @@ def train_instance(
     _train_min_cost_ls = 0.0
     _train_entropy = 0.0
     _logZ_mean = torch.tensor(0.0, device=DEVICE)
-    _logZ_nls_mean = torch.tensor(0.0, device=DEVICE)
+    _logZ_ls_mean = torch.tensor(0.0, device=DEVICE)
     ##################################################
     sum_loss = torch.tensor(0.0, device=DEVICE)
     sum_loss_ls = torch.tensor(0.0, device=DEVICE)
@@ -47,64 +56,54 @@ def train_instance(
         # heu_mat = (heu_vec + EPS).reshape(n_nodes + 1, n_nodes + 1)
         heu_mat = (heu_vec / (heu_vec.min() + EPS) + EPS).reshape(n_nodes + 1, n_nodes + 1)
 
-        aco = ACO(dist_mat, prizes, penalties, n_ants, heuristic=heu_mat, device=DEVICE)
+        aco = ACO(
+            dist_mat, prizes, penalties, n_ants, heuristic=heu_mat, use_local_search=guided_exploration, device=DEVICE
+        )
 
-        objs, log_probs, sols = aco.sample(invtemp=invtemp, return_sol=True)  # type: ignore
-        baseline = objs.mean()
+        objs, log_probs, sols = aco.sample(invtemp=invtemp)  # obj is cost to minimize
+        advantage = objs - objs.mean()
 
-        forward_flow = log_probs.sum(0) + logZ.expand(n_ants)  # type: ignore
-        backward_flow = math.log(1 / 2) - (objs - baseline).detach() * beta
+        if guided_exploration:
+            sols_ls, objs_ls = aco.local_search(sols, inference=False)
+            advantage_ls = objs_ls - objs_ls.mean()
+            weighted_advantage = cost_w * advantage_ls + (1 - cost_w) * advantage
+        else:
+            weighted_advantage = advantage
+
+        forward_flow = log_probs.sum(0) + logZ.expand(n_ants)
+        backward_flow = math.log(1 / 2) - weighted_advantage.detach() * beta
         tb_loss = torch.pow(forward_flow - backward_flow, 2).mean() 
         sum_loss += tb_loss
 
         ##################################################
         # Wandb
-        _train_mean_cost += baseline.item()
+        _train_mean_cost += objs.mean().item()
         _train_min_cost += objs.min().item()
         ##################################################
 
         if guided_exploration:
-            # TopK guided exploration (Note that this does not directly refine the solution)
-            best_obj, best_idx = objs.min(dim=0)
-            aco.update_pheromone(sols.T, objs, best_obj, best_idx)
-
-            with torch.no_grad():
-                objs_K, _, sols_K = aco.sample(return_sol=True, K=topk)  # type: ignore
-
-            _, idx = objs_K.topk(topk, largest=False)
-            rand_idx = torch.randint(0, len(objs_K), (n_ants - topk,), device=DEVICE)
-            sols_best = sols_K[:, idx]
-            sols_rand = sols_K[:, rand_idx]
-            sols_ls = torch.cat([sols_best, sols_rand], dim=1)
-
-            aco.pheromone = torch.ones_like(aco.distances)  # reset pheromone before calculating log_probs
             _, log_probs_ls = aco.gen_sol(require_prob=True, sols=sols_ls)
 
-            objs_best = objs_K[idx]
-            objs_rand = objs_K[rand_idx]
-            objs_ls = torch.cat([objs_best, objs_rand], dim=0)
-            baseline_ls = objs_ls.mean()
-
-            forward_flow_ls = log_probs_ls.sum(0) + logZ_ls.expand(n_ants)  # type: ignore
-            backward_flow_ls = math.log(1 / 2) - (objs_ls - baseline_ls).detach() * beta
-            tb_loss_ls = torch.pow(forward_flow_ls - backward_flow_ls, 2).mean() 
+            forward_flow_ls = log_probs_ls.sum(0) + logZ_ls.expand(n_ants)
+            backward_flow_ls = math.log(1 / 2) - advantage_ls.detach() * beta
+            tb_loss_ls = torch.pow(forward_flow_ls - backward_flow_ls, 2).mean()
             sum_loss_ls += tb_loss_ls
-
-            ##################################################
-            # Wandb
-            _train_mean_cost_ls += baseline_ls.item()
-            _train_min_cost_ls += objs_ls.min().item()
-            ##################################################
 
         ##################################################
         # Wandb
-        normed_heumat = heu_mat / heu_mat.sum(dim=1, keepdim=True)
-        entropy = -(normed_heumat * torch.log(normed_heumat)).sum(dim=1).mean()
-        _train_entropy += entropy.item()
+        if USE_WANDB:
+            _train_mean_cost += objs.mean().item()
+            _train_min_cost += objs.min().item()
 
-        _logZ_mean += logZ
-        if guided_exploration:
-            _logZ_nls_mean += logZ_ls  # type: ignore
+            normed_heumat = heu_mat / heu_mat.sum(dim=1, keepdim=True)
+            entropy = -(normed_heumat * torch.log(normed_heumat)).sum(dim=1).mean()
+            _train_entropy += entropy.item()
+
+            _logZ_mean += logZ
+            if guided_exploration:
+                _train_mean_cost_ls += objs_ls.mean().item()
+                _train_min_cost_ls += objs_ls.min().item()
+                _logZ_ls_mean += logZ_ls
         ##################################################
 
     sum_loss /= batch_size
@@ -127,9 +126,10 @@ def train_instance(
                 "train_entropy": _train_entropy / batch_size,
                 "train_loss": sum_loss.item(),
                 "train_loss_ls": sum_loss_ls.item(),
+                "cost_w": cost_w,
                 "invtemp": invtemp,
                 "logZ": _logZ_mean.item() / batch_size,
-                "logZ_nls": _logZ_nls_mean.item() / batch_size,
+                "logZ_ls": _logZ_ls_mean.item() / batch_size,
                 "beta": beta,
             },
             step=it,
@@ -147,16 +147,14 @@ def infer_instance(model, instance, n_ants):
     # heu_mat = (heu_mat + EPS).reshape(n, n)
     heu_mat = (heu_mat / (heu_mat.min() + EPS) + EPS).reshape(n, n)
 
-    aco = ACO(dist_mat, prizes, penalties, n_ants, heuristic=heu_mat, device=DEVICE)
+    aco = ACO(dist_mat, prizes, penalties, n_ants, heuristic=heu_mat, use_local_search=True, device=DEVICE)
 
-    objs, _ = aco.sample()  # type: ignore
+    objs = aco.sample()[0]
     baseline = objs.mean().item()
     best_sample_obj = objs.min().item()
-
-    best_aco_1, diversity_1 = aco.run(1)
-    best_aco_T, diversity_T = aco.run(T - 1)
+    best_aco_1, diversity_1, _ = aco.run(1)
+    best_aco_T, diversity_T, _ = aco.run(T - 1)
     best_aco_1, best_aco_T = best_aco_1.item(), best_aco_T.item()  # type: ignore
-
     return np.array([baseline, best_sample_obj, best_aco_1, best_aco_T, diversity_1, diversity_T])
 
 
@@ -168,14 +166,14 @@ def train_epoch(
     net,
     optimizer,
     batch_size,
+    cost_w=0.5,
     invtemp=1.0,
     guided_exploration=False,
     beta=50.0,
-    topk=5,
 ):
     for i in tqdm(range(steps_per_epoch), desc="Train", dynamic_ncols=True):
         it = (epoch - 1) * steps_per_epoch + i
-        train_instance(net, optimizer, batch_size, n_nodes, n_ants, invtemp, guided_exploration, beta, topk, it)
+        train_instance(net, optimizer, batch_size, n_nodes, n_ants, cost_w, invtemp, guided_exploration, beta, it)
 
 
 @torch.no_grad()
@@ -219,10 +217,10 @@ def train(
         pretrained=None,
         savepath="../pretrained/pctsp",
         run_name="",
+        cost_w_schedule_params=(0.5, 1.0, 5),  # (cost_w_min, cost_w_max, cost_w_flat_epochs)
         invtemp_schedule_params=(0.8, 1.0, 5),  # (invtemp_min, invtemp_max, invtemp_flat_epochs)
         guided_exploration=False,
         beta_schedule_params=(5, 50, 5),  # (beta_min, beta_max, beta_flat_epochs)
-        topk=5,
     ):
     savepath = os.path.join(savepath, str(n_nodes), run_name)
     os.makedirs(savepath, exist_ok=True)
@@ -240,6 +238,10 @@ def train(
 
     sum_time = 0
     for epoch in range(1, epochs + 1):
+        # Cost Weight Schedule
+        cost_w_min, cost_w_max, cost_w_flat_epochs = cost_w_schedule_params
+        cost_w = cost_w_min + (cost_w_max - cost_w_min) * min((epoch - 1) / (epochs - cost_w_flat_epochs), 1.0)
+
         # Heatmap Inverse Temperature Schedule
         invtemp_min, invtemp_max, invtemp_flat_epochs = invtemp_schedule_params
         invtemp = invtemp_min + (invtemp_max - invtemp_min) * min((epoch - 1) / (epochs - invtemp_flat_epochs), 1.0)
@@ -257,10 +259,10 @@ def train(
             net,
             optimizer,
             batch_size,
+            cost_w,
             invtemp,
             guided_exploration,
             beta,
-            topk,
         )
         sum_time += time.time() - start
 
@@ -302,23 +304,25 @@ if __name__ == "__main__":
     parser.add_argument("--invtemp_min", type=float, default=1.0, help='Inverse temperature min for GFACS')
     parser.add_argument("--invtemp_max", type=float, default=1.0, help='Inverse temperature max for GFACS')
     parser.add_argument("--invtemp_flat_epochs", type=int, default=5, help='Inverse temperature glat rpochs for GFACS')
-    ### Top-k guided exploration
-    parser.add_argument("--disable_guided_exp", action='store_true', help='Disable guided exploration for GFACS')
-    parser.add_argument("--topk", type=int, default=5, help="TopK for guided exploration")
     ### GFACS
+    parser.add_argument("--disable_guided_exp", action='store_true', help='Disable guided exploration for GFACS')
     parser.add_argument("--beta_min", type=float, default=None, help='Beta min for GFACS')
     parser.add_argument("--beta_max", type=float, default=None, help='Beta max for GFACS')
     parser.add_argument("--beta_flat_epochs", type=int, default=5, help='Beta flat epochs for GFACS')
+    ### Energy Reshaping
+    parser.add_argument("--cost_w_min", type=float, default=0.5, help='Cost weight min for GFACS')
+    parser.add_argument("--cost_w_max", type=float, default=0.5, help='Cost weight max for GFACS')
+    parser.add_argument("--cost_w_flat_epochs", type=int, default=5, help='Cost weight flat epochs for GFACS')
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
 
     args = parser.parse_args()
 
     if args.beta_min is None:
-        beta_min_map = {100: 20, 200: 20, 500: 20}
+        beta_min_map = {100: 20, 200: 20, 500: 50}
         args.beta_min = beta_min_map[args.nodes]
     if args.beta_max is None:
-        beta_max_map = {100: 50, 200: 50, 500: 50}
+        beta_max_map = {100: 50, 200: 50, 500: 100}
         args.beta_max = beta_max_map[args.nodes]
 
     DEVICE = args.device if torch.cuda.is_available() else "cpu"
@@ -358,8 +362,8 @@ if __name__ == "__main__":
         pretrained=args.pretrained,
         savepath=args.output,
         run_name=run_name,
+        cost_w_schedule_params=(args.cost_w_min, args.cost_w_max, args.cost_w_flat_epochs),
         invtemp_schedule_params=(args.invtemp_min, args.invtemp_max, args.invtemp_flat_epochs),
         guided_exploration=(not args.disable_guided_exp),
         beta_schedule_params=(args.beta_min, args.beta_max, args.beta_flat_epochs),
-        topk=args.topk,
     )

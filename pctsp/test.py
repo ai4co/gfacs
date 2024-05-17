@@ -26,13 +26,26 @@ def infer_instance(model, instance, n_ants, t_aco_diff):
     else:
         heu_mat = None
 
-    aco = ACO(dist_mat, prizes, penalties, n_ants, heuristic=heu_mat, device=DEVICE)
+    aco = ACO(
+        dist_mat,
+        prizes,
+        penalties,
+        n_ants,
+        heuristic=heu_mat,
+        elitist=ACOALG == "ELITIST",
+        maxmin=ACOALG == "MAXMIN",
+        rank_based=ACOALG == "RANK",
+        use_local_search=True,
+        device=DEVICE,
+    )
 
     results = torch.zeros(size=(len(t_aco_diff),), device=DEVICE)
     diversities = torch.zeros(size=(len(t_aco_diff),))
+    elapsed_time = 0
     for i, t in enumerate(t_aco_diff):
-        results[i], diversities[i] = aco.run(t)
-    return results, diversities
+        results[i], diversities[i], t = aco.run(t)
+        elapsed_time += t
+    return results, diversities, elapsed_time
 
 
 @torch.no_grad()
@@ -42,14 +55,13 @@ def test(dataset, model, n_ants, t_aco):
 
     sum_results = torch.zeros(size=(len(t_aco_diff),))
     sum_diversities = torch.zeros(size=(len(t_aco_diff),))
-    start = time.time()
+    sum_times = 0
     for instance in tqdm(dataset, dynamic_ncols=True):
-        results, diversities = infer_instance(model, instance, n_ants, t_aco_diff)
+        results, diversities, elapsed_times = infer_instance(model, instance, n_ants, t_aco_diff)
         sum_results += results.cpu()
         sum_diversities += diversities
-    end = time.time()
-
-    return sum_results / len(dataset), sum_diversities / len(dataset), end - start
+        sum_times += elapsed_times
+    return sum_results / len(dataset), sum_diversities / len(dataset), sum_times / len(dataset)
 
 
 if __name__ == "__main__":
@@ -66,12 +78,15 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--size", type=int, default=None, help="Number of instances to test")
     ### GFACS
     parser.add_argument("--disable_guided_exp", action='store_true', help='True for model w/o guided exploration.')
+    ### ACO
+    parser.add_argument("--aco", type=str, default="AS", choices=["AS", "ELITIST", "MAXMIN", "RANK"], help="ACO algorithm")
     ### Seed
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
 
     args = parser.parse_args()
 
     DEVICE = args.device if torch.cuda.is_available() else 'cpu'
+    ACOALG = args.aco
 
     # seed everything
     torch.manual_seed(args.seed)
@@ -91,7 +106,7 @@ if __name__ == "__main__":
 
     t_aco = list(range(1, args.n_iter + 1))
     avg_cost, avg_diversity, duration = test(test_list, net, args.n_ants, t_aco)
-    print('total duration: ', duration)
+    print('average inference time: ', duration)
     for i, t in enumerate(t_aco):
         print(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}")
 
@@ -109,7 +124,7 @@ if __name__ == "__main__":
         f.write(f"device: {'cpu' if DEVICE == 'cpu' else DEVICE+'+cpu'}\n")
         f.write(f"n_ants: {args.n_ants}\n")
         f.write(f"seed: {args.seed}\n")
-        f.write(f"total duration: {duration}\n")
+        f.write(f"average inference time: {duration}\n")
         for i, t in enumerate(t_aco):
             f.write(f"T={t}, avg. cost {avg_cost[i]}, avg. diversity {avg_diversity[i]}\n")
 
